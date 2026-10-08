@@ -241,9 +241,10 @@ def cmd_selftest(args, _):
     expect("47% below its high, a dip buy fires", ok)
 
     # Parsing.
+    # The path as this system prints it: backslashes on Windows.
+    missing = Path("/nonexistent/prices.csv")
     expect("an empty history parses to nothing rather than crashing",
-           load_history("/nonexistent/prices.csv") == ({}, ["no price history at "
-                                                            "/nonexistent/prices.csv"]))
+           load_history(missing) == ({}, ["no price history at %s" % missing]))
 
     width = max(len(n) for n, _ in checks)
     for name, passed in checks:
