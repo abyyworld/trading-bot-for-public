@@ -394,7 +394,7 @@ Add `--config PATH` before the command to use another config file (and so anothe
 
 ```
 $ python3 brokers/paper.py show
-paper (simulated, no real money), GBP, state in /path/to/halal-momentum-bot/paper_account.json
+paper (simulated, no real money), GBP, state in /path/to/trading-bot-for-public/paper_account.json
 cash            10000.00
 invested            0.00
 total           10000.00

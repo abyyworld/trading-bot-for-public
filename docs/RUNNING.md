@@ -89,8 +89,8 @@ distribution's `tzdata` package (`sudo apt install tzdata`).
 ### Get the code
 
 ```
-git clone https://github.com/abyyworld/halal-momentum-bot.git
-cd halal-momentum-bot
+git clone https://github.com/abyyworld/trading-bot-for-public.git
+cd trading-bot-for-public
 ```
 
 Or use the green Code button on GitHub, Download ZIP, and unzip it. If you want the bot to
@@ -177,10 +177,10 @@ it wakes.
 To keep the loop going after you close the terminal:
 
 - Linux and macOS:
-  `nohup python3 -u run.py loop --execute >> ~/halal-momentum-bot.log 2>&1 &`
+  `nohup python3 -u run.py loop --execute >> ~/trading-bot-for-public.log 2>&1 &`
   (stop it with `pkill -f "run.py loop"`).
 - Windows: leave the Command Prompt window open, or put a shortcut to a `.cmd` file that runs
-  `py "%USERPROFILE%\halal-momentum-bot\run.py" loop --execute` in your Startup folder (press
+  `py "%USERPROFILE%\trading-bot-for-public\run.py" loop --execute` in your Startup folder (press
   Win+R and type `shell:startup`).
 - Linux with systemd: see [A systemd service](#linux-a-systemd-service-for-the-loop) below.
 
@@ -230,13 +230,13 @@ Open your crontab with `crontab -e` and add the two lines below. They are the ti
 clock is on UTC (`date` prints `UTC`; most cloud servers are):
 
 ```
-17 8-12  * * 1-5  flock -n /tmp/halal-momentum-bot.lock /usr/bin/python3 /home/you/halal-momentum-bot/run.py once --execute >> /home/you/halal-momentum-bot.log 2>&1
-47 13-20 * * 1-5  flock -n /tmp/halal-momentum-bot.lock /usr/bin/python3 /home/you/halal-momentum-bot/run.py once --execute >> /home/you/halal-momentum-bot.log 2>&1
+17 8-12  * * 1-5  flock -n /tmp/trading-bot-for-public.lock /usr/bin/python3 /home/you/trading-bot-for-public/run.py once --execute >> /home/you/trading-bot-for-public.log 2>&1
+47 13-20 * * 1-5  flock -n /tmp/trading-bot-for-public.lock /usr/bin/python3 /home/you/trading-bot-for-public/run.py once --execute >> /home/you/trading-bot-for-public.log 2>&1
 ```
 
 `flock -n` skips a run while the previous one is still going, so two runs never overlap. It
 comes with Linux (util-linux) but not with macOS: on a Mac, leave out
-`flock -n /tmp/halal-momentum-bot.lock`, or better, use launchd below.
+`flock -n /tmp/trading-bot-for-public.lock`, or better, use launchd below.
 
 If the computer's clock is not on UTC, cron reads these times in local time. Either:
 
@@ -246,7 +246,7 @@ If the computer's clock is not on UTC, cron reads these times in local time. Eit
   places nothing:
 
   ```
-  17 * * * 1-5  flock -n /tmp/halal-momentum-bot.lock /usr/bin/python3 /home/you/halal-momentum-bot/run.py once --execute >> /home/you/halal-momentum-bot.log 2>&1
+  17 * * * 1-5  flock -n /tmp/trading-bot-for-public.lock /usr/bin/python3 /home/you/trading-bot-for-public/run.py once --execute >> /home/you/trading-bot-for-public.log 2>&1
   ```
 
 cron does not catch up on runs missed while the computer was off.
@@ -254,14 +254,14 @@ cron does not catch up on runs missed while the computer was off.
 ### Linux: a systemd service for the loop
 
 To keep `run.py loop` running in the background and start it at boot, create
-`~/.config/systemd/user/halal-momentum-bot.service`:
+`~/.config/systemd/user/trading-bot-for-public.service`:
 
 ```
 [Unit]
-Description=halal-momentum-bot loop
+Description=trading-bot-for-public loop
 
 [Service]
-ExecStart=/usr/bin/python3 %h/halal-momentum-bot/run.py loop --execute
+ExecStart=/usr/bin/python3 %h/trading-bot-for-public/run.py loop --execute
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 
@@ -273,15 +273,15 @@ Then:
 
 ```
 systemctl --user daemon-reload
-systemctl --user enable --now halal-momentum-bot
-journalctl --user -u halal-momentum-bot -f       # watch it
-systemctl --user stop halal-momentum-bot         # stop it
+systemctl --user enable --now trading-bot-for-public
+journalctl --user -u trading-bot-for-public -f       # watch it
+systemctl --user stop trading-bot-for-public         # stop it
 loginctl enable-linger "$USER"                   # keep it running when you log out
 ```
 
 ### macOS: launchd
 
-Save this as `~/Library/LaunchAgents/local.halal-momentum-bot.plist`, with your own user
+Save this as `~/Library/LaunchAgents/local.trading-bot-for-public.plist`, with your own user
 name and Python path in place of `/Users/you` and `/usr/bin/python3`:
 
 ```xml
@@ -290,12 +290,12 @@ name and Python path in place of `/Users/you` and `/usr/bin/python3`:
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>local.halal-momentum-bot</string>
+  <string>local.trading-bot-for-public</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>if [ "$(date -u +%u)" -le 5 ]; then exec /usr/bin/python3 /Users/you/halal-momentum-bot/run.py once --execute; fi</string>
+    <string>if [ "$(date -u +%u)" -le 5 ]; then exec /usr/bin/python3 /Users/you/trading-bot-for-public/run.py once --execute; fi</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -303,9 +303,9 @@ name and Python path in place of `/Users/you` and `/usr/bin/python3`:
     <integer>17</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/Users/you/halal-momentum-bot.log</string>
+  <string>/Users/you/trading-bot-for-public.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/you/halal-momentum-bot.log</string>
+  <string>/Users/you/trading-bot-for-public.log</string>
 </dict>
 </plist>
 ```
@@ -316,10 +316,10 @@ second copy while one is running, and a run missed while the Mac slept happens o
 wakes.
 
 ```
-plutil -lint ~/Library/LaunchAgents/local.halal-momentum-bot.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.halal-momentum-bot.plist
-launchctl kickstart gui/$(id -u)/local.halal-momentum-bot     # one run now, to test
-launchctl bootout gui/$(id -u)/local.halal-momentum-bot       # stop and unload it
+plutil -lint ~/Library/LaunchAgents/local.trading-bot-for-public.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.trading-bot-for-public.plist
+launchctl kickstart gui/$(id -u)/local.trading-bot-for-public     # one run now, to test
+launchctl bootout gui/$(id -u)/local.trading-bot-for-public       # stop and unload it
 ```
 
 Keep the project folder outside Documents, Desktop and Downloads (your home folder is fine):
@@ -332,14 +332,14 @@ macOS blocks background jobs from those folders unless you grant access.
 
    ```
    @echo off
-   py "%USERPROFILE%\halal-momentum-bot\run.py" once --execute >> "%USERPROFILE%\halal-momentum-bot.log" 2>&1
+   py "%USERPROFILE%\trading-bot-for-public\run.py" once --execute >> "%USERPROFILE%\trading-bot-for-public.log" 2>&1
    ```
 
 2. In Command Prompt, create a task that runs it at 17 minutes past every hour, Monday to
    Friday:
 
    ```
-   schtasks /Create /TN "halal-momentum-bot" /TR "\"%USERPROFILE%\run-bot.cmd\"" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 00:17 /RI 60 /DU 23:59
+   schtasks /Create /TN "trading-bot-for-public" /TR "\"%USERPROFILE%\run-bot.cmd\"" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 00:17 /RI 60 /DU 23:59
    ```
 
    The `\"` quotes inside `/TR` keep a user folder with a space in its name, such as
@@ -354,10 +354,10 @@ To run it once now as a test, see when it last ran and with what result, pause i
 remove it:
 
 ```
-schtasks /Run /TN "halal-momentum-bot"
-schtasks /Query /TN "halal-momentum-bot" /V /FO LIST
-schtasks /Change /TN "halal-momentum-bot" /DISABLE
-schtasks /Delete /TN "halal-momentum-bot" /F
+schtasks /Run /TN "trading-bot-for-public"
+schtasks /Query /TN "trading-bot-for-public" /V /FO LIST
+schtasks /Change /TN "trading-bot-for-public" /DISABLE
+schtasks /Delete /TN "trading-bot-for-public" /F
 ```
 
 ## 3. Docker
@@ -411,10 +411,10 @@ cannot write its ledger (`docker compose run --rm bot doctor` says so).
 Without Compose:
 
 ```
-docker build -t halal-momentum-bot .
-docker run -d --name halal-momentum-bot --restart unless-stopped -v "$(pwd)":/app halal-momentum-bot loop --execute
-docker logs -f halal-momentum-bot
-docker stop halal-momentum-bot
+docker build -t trading-bot-for-public .
+docker run -d --name trading-bot-for-public --restart unless-stopped -v "$(pwd)":/app trading-bot-for-public loop --execute
+docker logs -f trading-bot-for-public
+docker stop trading-bot-for-public
 ```
 
 The mount (`-v`) matters: without it the ledger and the paper account live inside the
@@ -445,7 +445,7 @@ anywhere. So:
   **Private**, and add no README, licence or `.gitignore`. Then copy the project into it:
 
   ```
-  git clone https://github.com/abyyworld/halal-momentum-bot.git my-bot
+  git clone https://github.com/abyyworld/trading-bot-for-public.git my-bot
   cd my-bot
   git remote rename origin upstream
   git remote add origin https://github.com/YOUR-NAME/my-bot.git
@@ -594,10 +594,10 @@ still pending at Trading 212 can be cancelled in the app.
 | --- | --- |
 | `run.py loop` in a terminal | Ctrl+C. An order cut off mid-run is safe: the ledger is written first. |
 | cron | `crontab -e` and delete or comment out the lines. |
-| systemd | `systemctl --user disable --now halal-momentum-bot` |
-| launchd | `launchctl bootout gui/$(id -u)/local.halal-momentum-bot` |
-| Task Scheduler | `schtasks /Change /TN "halal-momentum-bot" /DISABLE` |
-| Docker | `docker compose down`, or `docker stop halal-momentum-bot` |
+| systemd | `systemctl --user disable --now trading-bot-for-public` |
+| launchd | `launchctl bootout gui/$(id -u)/local.trading-bot-for-public` |
+| Task Scheduler | `schtasks /Change /TN "trading-bot-for-public" /DISABLE` |
+| Docker | `docker compose down`, or `docker stop trading-bot-for-public` |
 | GitHub schedule | Delete the `BOT_ENABLED` variable (manual runs still work), or Actions tab, Trading control panel, the `...` menu, **Disable workflow**. |
 
 ## 6. Troubleshooting

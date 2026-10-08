@@ -1,4 +1,4 @@
-# halal-momentum-bot
+# trading-bot-for-public
 
 A rule-driven investing bot that keeps part of your account in an Islamic index fund and the
 rest in the ten strongest stocks of a Shariah-screened ("not haram") S&P 500, re-picked once a
@@ -63,8 +63,8 @@ from the holdings file of SPUS, an S&P 500 Shariah fund.
 Get the code with git, as below, or download the ZIP from the GitHub page and unpack it. Then:
 
 ```
-git clone https://github.com/abyyworld/halal-momentum-bot.git
-cd halal-momentum-bot
+git clone https://github.com/abyyworld/trading-bot-for-public.git
+cd trading-bot-for-public
 python3 run.py doctor                          # should end: nothing blocks a run
 python3 brokers/paper.py buy MWIXl_EQ 2000     # the one-off core fund buy
 python3 run.py once                            # propose only, place nothing

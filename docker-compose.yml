@@ -16,7 +16,7 @@
 services:
   bot:
     build: .
-    image: halal-momentum-bot
+    image: trading-bot-for-public
     # Proposes only, as shipped. To place orders that pass every gate, make this
     #     command: ["loop", "--execute"]
     # With broker.adapter "paper" (the default) those orders are simulated. Real money
