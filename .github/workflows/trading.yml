@@ -1,0 +1,437 @@
+# Trading control panel: the bot on GitHub's machines, driven from a browser.
+#
+# USE IT ONLY IN A PRIVATE REPOSITORY. Every run writes your cash, holdings and orders to the
+# run summary, sometimes to an issue, and commits the order ledger and the account state back
+# to the repository. In a public repository all of that would be public. So on any account
+# but the paper one, which is simulated, a run stops at its first step unless the repository
+# is private.
+#
+# Setup, once, in a browser:
+#   1. Settings > Actions > General > Workflow permissions > Read and write.
+#   2. Trading 212 only (broker.adapter "trading212" in config.json): Settings > Secrets and
+#      variables > Actions > New repository secret, twice:
+#        T212_API_KEY       your key
+#        T212_API_SECRET    your secret
+#      Trading 212 uses HTTP Basic over a key AND a secret, so it needs both. The paper
+#      adapter, the default, needs neither.
+#   3. To switch the schedule on: the same page, Variables tab > New repository variable,
+#        BOT_ENABLED        true
+#      Until then every scheduled run is skipped before it starts, so a fresh copy never
+#      trades and never spends Actions minutes on its own. Manual runs work either way.
+#
+# Then: the Actions tab > Trading control panel > Run workflow. Pick a command and press the
+# green button. The answer is on the run's summary page when it finishes; nothing is emailed.
+#
+# An issue is opened, and assigned to the repository owner, ONLY when a run needs a person:
+# an order actually reached the broker, or a command failed. A propose that proposes nothing
+# stays silent, and so does every read-only lookup, so an issue in your inbox means something
+# happened. Tick the notify box on a manual run if you want one anyway.
+
+name: Trading control panel
+
+on:
+  # Thirteen runs a weekday, in UTC, placed inside the hours each market is open:
+  #   08:17 to 12:17, five runs, inside the London Stock Exchange's hours (07:00 to 15:30 UTC
+  #   in British summer time, 08:00 to 16:30 in winter), for the core fund;
+  #   13:47 to 20:47, eight runs, across the US session, which is 13:30 to 20:00 UTC while
+  #   New York is on summer time and 14:30 to 21:00 in winter. Seven of the eight land in it
+  #   in either season, so nothing changes when the clocks move; hours.py reads New York's
+  #   own clock and holds the one that falls outside.
+  # They are the same times as config.json schedule.utc_times, which `run.py loop` uses;
+  # change both together. GitHub drops and delays scheduled runs under load, sometimes by
+  # hours, so several a day make it likely that some land in each market's hours. Minutes 17
+  # and 47 keep off the top-of-the-hour queue. Plain UTC cron lines, so nothing depends on a
+  # runner's time zone.
+  #
+  # Running more often places nothing extra: the 120-hour cooldown blocks a repeat of any
+  # instrument, the ledger blocks a repeat on the same day, and the momentum book trades
+  # only in the 7 days after each monthly build. A run while a market is shut holds the
+  # order and a later run places it. A run with nothing to do is the normal case and
+  # notifies nobody.
+  #
+  # A scheduled run is `execute`, on the account config.json names, with no person in the
+  # loop: that is the point of a schedule. What bounds it is gates.py, whose checks run the
+  # same whoever started the run: the allowlist, the per-order and daily caps, the cash
+  # buffer, the position cap, the cooldown, market hours and the idempotency ledger. A
+  # committed HALT file stops it dead; so does deleting BOT_ENABLED.
+  schedule:
+    - cron: "17 8-12 * * 1-5"
+    - cron: "47 13-20 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "What to do"
+        required: true
+        default: doctor
+        type: choice
+        options:
+          - doctor         # check Python, config, broker and credentials; no network
+          - check          # probe the broker connection and report which endpoints work
+          - portfolio      # show cash and open positions
+          - limits         # show the compliance allowlist, risk limits and active strategy
+          - instruments    # find the exact Trading 212 ticker for a name
+          - exchanges      # exchange working schedules
+          - history        # recent order history
+          - prices         # how far each ticker in the search box is below its 52-week high
+          - paper          # the paper account: show, buy TICKER AMOUNT, sell TICKER N|all, reset
+          - backtest       # replay years of history: which picking rule paid (read-only)
+          - propose        # run the strategy and show what it WOULD do
+          - execute        # the same, but actually place the orders
+      search:
+        description: "instruments: names separated by |. prices: tickers like AAPL_US_EQ, space separated (empty: the allowlist's US shares). paper: e.g. buy MWIXl_EQ 2000. backtest: its arguments"
+        required: false
+        default: ""
+      environment:
+        description: "Trading 212 only: which account. config = execution.environment in config.json"
+        required: true
+        default: config
+        type: choice
+        options: [config, demo, live]
+      confirm:
+        description: "For execute on real money only: type PLACE ORDERS to confirm"
+        required: false
+        default: ""
+      notify:
+        description: "Also open an issue with the result (normally only placed orders and failures do)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  # write, not read: the order ledger has to be committed back to survive the runner.
+  contents: write
+  issues: write
+
+jobs:
+  run:
+    # Scheduled runs do nothing until the repository variable BOT_ENABLED is "true".
+    if: github.event_name != 'schedule' || vars.BOT_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    # A momentum build reads hundreds of price histories and takes minutes; an hour is far
+    # more than any run needs, and stops a hung one holding up the runs queued behind it.
+    timeout-minutes: 60
+
+    # One run at a time, never cancelled: two at once could both pass the daily cap or place
+    # the same order. On the job rather than the workflow, so a scheduled run skipped for
+    # want of BOT_ENABLED never takes a place in the queue.
+    concurrency:
+      group: trading-control
+      cancel-in-progress: false
+
+    # Resolved once, here. A scheduled run has NO inputs at all, so every use needs the same
+    # fallback: a scheduled run is `execute` on the environment config.json names.
+    env:
+      COMMAND: ${{ inputs.command || 'execute' }}
+      ENV_CHOICE: ${{ inputs.environment || 'config' }}
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      # The branch's tip when the job starts, not the commit the run was queued on: a run
+      # that waited behind another must see the ledger that run committed, or it can repeat
+      # an order or spend past the daily cap.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Which account this run reaches: config.json's broker.adapter, and its
+      # execution.environment unless a manual run picked demo or live.
+      - name: Work out the account
+        id: account
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          read -r adapter configured <<< "$(python3 -c "import json; c = json.load(open('config.json', encoding='utf-8')); print(str(c['broker'].get('adapter') or 'trading212').strip().lower(), c['execution'].get('environment', 'demo'))")"
+          if [ -z "$adapter" ]; then
+            echo "::error::config.json could not be read, so this run cannot tell which account it would reach"
+            exit 1
+          fi
+          # A real account only in a private repository: this run's summary, its issues and
+          # the files it commits would show that account's cash, holdings and orders to
+          # anyone. Asked of the API rather than read from the event, because a scheduled
+          # run's event carries no repository; GITHUB_TOKEN can always read this much. A
+          # visibility that cannot be read counts as public. The paper account may run
+          # anywhere: it is simulated, and nobody's account is in it.
+          if [ "$adapter" != paper ]; then
+            # A failed call can print the error body on stdout, so it is replaced, and only a
+            # single known word may reach the refusal text and the step outputs.
+            private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private 2>/dev/null) || private=unknown
+            case "$private" in true|false) ;; *) private=unknown ;; esac
+            if [ "$private" != true ]; then
+              refusal="Refused: broker.adapter is $adapter, and this repository is not private (GitHub reports private: $private). A run here would publish that account's cash, holdings and orders in the run summary, in issues and in the files it commits. Run it from a PRIVATE copy (docs/RUNNING.md, section 4), or set broker.adapter to paper."
+              echo "::error::$refusal"
+              echo "$refusal" >> "$GITHUB_STEP_SUMMARY"
+              echo "refusal=$refusal" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
+          env="$ENV_CHOICE"
+          [ "$env" = config ] && env="$configured"
+          # Anything but the paper account or Trading 212's demo may be real money.
+          real=yes
+          [ "$adapter" = paper ] && real=no
+          [ "$adapter" = trading212 ] && [ "$env" = demo ] && real=no
+          account="$adapter"
+          [ "$adapter" = trading212 ] && account="trading212 $env"
+          {
+            echo "ENV=$env"
+            echo "ACCOUNT=$account"
+            echo "REAL_MONEY=$real"
+          } >> "$GITHUB_ENV"
+          echo "account: $account, real money possible: $real"
+
+      # Placing orders that may be real money needs a typed confirmation, so a mis-click on
+      # a dropdown cannot spend it. The schedule does not ask: it was switched on
+      # deliberately with BOT_ENABLED, and it runs the same gates.
+      - name: Check the confirmation
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'execute'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$REAL_MONEY" = yes ] && [ "$CONFIRM" != "PLACE ORDERS" ]; then
+            echo "::error::execute on $ACCOUNT can place real orders: set the confirm box to exactly PLACE ORDERS"
+            exit 1
+          fi
+
+      - name: The selftests must pass before anything else runs
+        # Every module a run uses, against fake brokers: no network and none of your files
+        # touched. trade.py's drives the whole runner, second pass included. backtest.py and
+        # research.py trade nothing and take most of a minute, so they are left to ci.yml,
+        # which runs every selftest on every push.
+        run: python3 run.py selftest sizing signals rules gates hours pricefeed momentum universe broker trade brokers/paper
+
+      - name: Run the command
+        id: run
+        env:
+          # Empty when not set, which is fine for the paper account. Trading 212 needs both.
+          T212_API_KEY: ${{ secrets.T212_API_KEY }}
+          T212_API_SECRET: ${{ secrets.T212_API_SECRET }}
+          SEARCH: ${{ inputs.search }}
+          FORCE_NOTIFY: ${{ inputs.notify || 'false' }}
+        run: |
+          # GitHub runs steps as `bash -e`, so a non-zero exit from any probe would kill this
+          # step before the output file is recorded, and the issue step would be handed an
+          # empty body. A failing check is a RESULT worth reporting, so failures are
+          # tolerated here deliberately.
+          set +e
+          # -f: the search box is split into words below, but never expanded as file names.
+          set -fuo pipefail
+          out=$(mktemp)
+          {
+            echo "## \`$COMMAND\` on **$ACCOUNT**"
+            echo
+            echo '```'
+            case "$COMMAND" in
+              doctor)
+                python3 run.py doctor --env "$ENV" 2>&1
+                ;;
+              check)
+                python3 broker.py --env "$ENV" check 2>&1
+                ;;
+              portfolio)
+                python3 broker.py --env "$ENV" summary 2>&1
+                echo
+                python3 broker.py --env "$ENV" positions 2>&1
+                ;;
+              exchanges)
+                python3 broker.py --env "$ENV" exchanges 2>&1
+                ;;
+              history)
+                python3 broker.py --env "$ENV" history 2>&1 | head -60
+                ;;
+              instruments)
+                # The exact Trading 212 ticker, which is AAPL_US_EQ and not AAPL.
+                python3 broker.py --env "$ENV" instruments "${SEARCH:-}" 2>&1
+                ;;
+              paper)
+                # The paper account's own commands. Its state is committed back below.
+                case "${SEARCH%% *}" in
+                  ''|show|buy|sell|reset) python3 brokers/paper.py ${SEARCH:-show} 2>&1 ;;
+                  *) echo "paper takes show, buy TICKER AMOUNT, sell TICKER N|all or reset"; false ;;
+                esac
+                ;;
+              backtest)
+                # Read-only and slow (one Yahoo request per stock). See backtest.py for its biases.
+                case "${SEARCH%% *}" in
+                  gaps|probe) python3 backtest.py $SEARCH 2>&1 ;;
+                  *) python3 backtest.py run $SEARCH 2>&1 ;;
+                esac
+                ;;
+              prices)
+                # The outside price feed for the tickers in the search box (space separated),
+                # to look at candidates. With the box empty, for every allowlisted US share;
+                # the shipped allowlist has none, which is a hint, not a failure. No `exit`
+                # in here: this is a { } group, and exit would end the step before its
+                # outputs are recorded.
+                if [ -n "${SEARCH:-}" ]; then
+                  python3 pricefeed.py show $SEARCH 2>&1
+                elif us=$(python3 -c "import json; print(' '.join(e['ticker'] for e in json.load(open('config.json', encoding='utf-8'))['compliance']['allowlist'] if e['ticker'].endswith('_US_EQ')))"); then
+                  if [ -n "$us" ]; then
+                    python3 pricefeed.py show $us 2>&1
+                  else
+                    echo "compliance.allowlist in config.json has no US shares (tickers ending _US_EQ). Put tickers in the search box, space separated, such as AAPL_US_EQ MSFT_US_EQ."
+                  fi
+                else
+                  echo "config.json could not be read for the allowlist"
+                  false
+                fi
+                ;;
+              limits)
+                python3 gates.py explain 2>&1
+                echo
+                python3 rules.py explain 2>&1
+                ;;
+              propose|execute)
+                python3 run.py once --env "$ENV" \
+                  $([ "$COMMAND" = execute ] && echo --execute) 2>&1
+                ;;
+            esac
+            # Captured HERE, inside the block: the echo below would otherwise overwrite $?.
+            # A group command is not a subshell, so this survives to the lines after it.
+            rc=$?
+            echo '```'
+          } > "$out" 2>&1
+          echo "body=$out" >> "$GITHUB_OUTPUT"
+          echo "status=$rc" >> "$GITHUB_OUTPUT"
+          cat "$out"
+
+          # Who, if anyone, gets interrupted. The result is always on the run summary, so this
+          # is only about the inbox: money moved, or the command broke.
+          notify=no
+          [ "$rc" -ne 0 ] && notify=yes
+          # Anchored: "PROPOSE ONLY, nothing was placed" also contains the word placed, and a
+          # propose is exactly what must NOT notify.
+          grep -qE '^PLACING |^  placed |^  FAILED ' "$out" && notify=yes
+          [ "$FORCE_NOTIFY" = "true" ] && notify=yes
+          echo "notify=$notify" >> "$GITHUB_OUTPUT"
+          # Which kind, so the issue step can treat them differently: an order is always worth
+          # an issue, a failure only once until someone looks at it.
+          kind=failure
+          grep -qE '^PLACING |^  placed |^  FAILED ' "$out" && kind=orders
+          [ "$rc" -eq 0 ] && [ "$kind" != orders ] && kind=requested
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "exit status $rc, notify $notify, kind $kind"
+
+      # The ledger is the only defence against placing an order twice, and Trading 212's API
+      # is not idempotent. A runner's disk is destroyed after the job, so unless the ledger is
+      # committed back it protects nothing. There is one per account (sizing.ledger_path):
+      # orders_placed.json for Trading 212 live, orders_placed.demo.json for its demo,
+      # orders_placed.paper.json for the paper account, so all of orders_placed*.json is
+      # kept. The momentum targets (built once a month) and the paper account are committed
+      # for the same reason.
+      - name: Keep the order ledger and the account state
+        id: ledger
+        if: always()
+        run: |
+          set -e
+          names=$(python3 -c "import json; c = json.load(open('config.json', encoding='utf-8')); print(c['strategy'].get('momentum', {}).get('file') or 'momentum_targets.json', c['broker'].get('paper', {}).get('state_file') or 'paper_account.json')" 2>/dev/null \
+                  || echo "momentum_targets.json paper_account.json")
+          files=""
+          # A pattern that matches nothing stays as it is, and the -f test skips it.
+          for name in orders_placed*.json $names; do
+            [ -f "$name" ] && files="$files $name"
+          done
+          [ -n "$files" ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add $files
+          git diff --cached --quiet && exit 0
+          git commit -q -m "Order ledger and account state $(date -u +%Y-%m-%dT%H:%M)"
+          # A momentum build takes minutes, long enough for the branch to move underneath it.
+          pushed=no
+          for attempt in 1 2 3; do
+            if git pull --rebase -q && git push -q; then pushed=yes; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep 5
+          done
+          # A ledger that never reaches the repository protects nothing: the next run would
+          # not see these orders. Fail loudly so the issue step below says so.
+          if [ "$pushed" != yes ]; then
+            echo "::error::the order ledger could not be pushed; the next run will not see this run's orders"
+            exit 1
+          fi
+
+      # Every run lands here, and this notifies nobody. Open the run from the Actions tab and
+      # the output is on its summary page.
+      - name: Put the result on the run summary
+        if: always()
+        env:
+          BODY: ${{ steps.run.outputs.body }}
+          REFUSAL: ${{ steps.account.outputs.refusal }}
+        run: |
+          if [ -n "$BODY" ] && [ -s "$BODY" ]; then
+            cat "$BODY" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$REFUSAL" ]; then
+            # Already on the summary, written by the step that refused.
+            :
+          else
+            echo "The run step produced no output, so it failed before it could report." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The exception path, not the normal one. Reached only when an order actually reached
+      # the broker, a command exited non-zero, the notify box was ticked, or the run step
+      # never completed (a failed selftest, a rejected confirmation, or a real account in a
+      # repository that is not private, where the issue says why), and when the order ledger
+      # could not be pushed.
+      - name: Open an issue, only when a person is needed
+        if: always() && (steps.run.outputs.notify == 'yes' || steps.run.conclusion != 'success' || steps.ledger.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ steps.run.outputs.body }}
+          KIND: ${{ steps.run.outputs.kind }}
+          LEDGER: ${{ steps.ledger.outcome }}
+          REFUSAL: ${{ steps.account.outputs.refusal }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="$BODY"
+          # If the run step died before recording its output, still say so rather than
+          # failing silently with an empty issue.
+          if [ -z "$body" ] || [ ! -s "$body" ]; then
+            body=$(mktemp)
+            if [ -n "$REFUSAL" ]; then
+              printf '%s\n\n%s\n' "$REFUSAL" "$RUN_URL" > "$body"
+            else
+              printf 'The run step produced no output. See the job log:\n%s\n' "$RUN_URL" > "$body"
+            fi
+          fi
+          if [ "$LEDGER" = failure ]; then
+            warned=$(mktemp)
+            printf '**The order ledger could not be pushed.** Until it is, the next run cannot see this run'"'"'s orders. Commit HALT if in doubt, and see the job log:\n%s\n\n' "$RUN_URL" > "$warned"
+            cat "$body" >> "$warned"
+            body="$warned"
+          fi
+          # Thirteen runs a day means a broken bot would open thirteen issues a day. So a
+          # failure opens ONE issue, labelled bot-failure, and later failures stay quiet while
+          # it is open; closing it re-arms the alarm. Placed orders are never deduplicated,
+          # since each one is money moving. A run step that never completed has no kind: a
+          # failure.
+          kind="${KIND:-failure}"
+          labels=()
+          if [ "$kind" = failure ]; then
+            gh label create bot-failure --color B60205 \
+              --description "The trading bot failed; later failures stay quiet until this is closed" \
+              2>/dev/null || true
+            open=$(gh issue list --label bot-failure --state open --json number --jq length \
+                   2>/dev/null || echo 0)
+            if [ "${open:-0}" -gt 0 ]; then
+              echo "A bot-failure issue is already open, so this failure is on the run summary only."
+              exit 0
+            fi
+            labels=(--label bot-failure)
+          fi
+          url=$(gh issue create \
+            --title "Trading: $COMMAND on ${ACCOUNT:-an unknown account} ($(date -u +%H:%M))" \
+            --body-file "$body" \
+            "${labels[@]}")
+          echo "$url"
+          # Assigned separately, so an owner that cannot be assigned (an organisation) still
+          # gets the issue, and it is never created twice.
+          gh issue edit "$url" --add-assignee "$OWNER" >/dev/null 2>&1 \
+            || echo "Could not assign the issue to $OWNER; it is open unassigned."

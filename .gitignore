@@ -1,0 +1,34 @@
+# Python and local environments
+__pycache__/
+*.pyc
+.venv/
+*.tmp
+
+# Credentials. Never commit these: see .env.example.
+.env
+
+# Research cache: daily prices, re-downloadable at any time.
+research/cache/
+
+# Deliberately NOT ignored, though the bot writes them:
+#
+#   orders_placed*.json    the order ledgers, one per account: orders_placed.json for
+#                          Trading 212 live, orders_placed.demo.json for its demo,
+#                          orders_placed.paper.json for the paper account, and
+#                          orders_placed.<adapter>.json for any other adapter. Trading 212's
+#                          API is not idempotent, so a ledger is written before each order
+#                          and is what stops a repeat and counts the daily cap.
+#   momentum_targets.json  this month's momentum book, built once a month.
+#   paper_account.json     the paper account's cash, holdings and orders.
+#
+# GitHub Actions throws away its disk after every run, so a run there only remembers what
+# the workflow commits back to the repository, and these files are that memory. Ignoring
+# them would let the next run repeat an order or spend past the daily cap.
+#
+#   HALT                   the killswitch. A committed HALT is how to stop a bot that runs
+#                          on GitHub's machines from a browser; ignoring it would make the
+#                          killswitch unusable everywhere except a local computer.
+#
+# Those files carry your cash, holdings and every order, and so do the run summaries and
+# issues the workflow writes. A repository that trades through GitHub Actions this way must
+# be PRIVATE. On your own computer or in Docker you need not commit them at all.

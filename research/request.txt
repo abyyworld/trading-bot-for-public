@@ -1,0 +1,13 @@
+# Research requests: an example to edit.
+#
+# .github/workflows/research.yml runs each non-comment line of this file as `python3 <line>`,
+# in order, on any push to a branch other than main that changes this file (or from the
+# Actions tab). It has no trading credentials and commits nothing; the output is on the run
+# summary. Blank lines and lines starting with # are skipped.
+#
+# The same lines work on your own machine: `python3 research.py fetch sp500` downloads daily
+# prices into research/cache, and `python3 research.py run` with no test names runs them all.
+# Test names are the keys of TESTS in research.py.
+research.py fetch sp500
+research.py selftest
+research.py run mom10_L1 mom10_L5

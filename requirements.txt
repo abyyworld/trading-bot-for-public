@@ -1,0 +1,4 @@
+# Everything else this project uses is the Python standard library. Windows ships Python
+# without the IANA time zone database that zoneinfo reads (New York's and London's market
+# hours), so it needs the tzdata package; Linux and macOS already have the system's.
+tzdata; sys_platform == "win32"

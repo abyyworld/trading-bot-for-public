@@ -1,0 +1,54 @@
+# Continuous integration: every module's selftest, and the doctor, on Python 3.9 (the oldest
+# this project supports) and 3.13. Offline tests against fake brokers: no secrets, no broker
+# account, nothing placed, nothing committed.
+#
+# Which machines: Linux, Windows and macOS when the repository is public, where Actions
+# minutes are free, and on any run started by hand (Actions > CI > Run workflow). In a
+# private repository a push or a pull request runs on Linux only: GitHub bills a private
+# repository's Windows minutes at twice the Linux rate and its macOS minutes at ten times,
+# from the same monthly allowance the scheduled trading runs draw on, and once that is used
+# up those runs stop until the month ends. The ledger commits the trading workflow pushes
+# start no CI run, as GitHub starts no workflow from a push made with its own token.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # Every combination reports, so one platform's failure does not hide another's.
+      fail-fast: false
+      matrix:
+        # Decided here because a job-level `if` cannot see the matrix. Push, pull_request
+        # and workflow_dispatch events all carry the repository and its private flag.
+        os: ${{ (github.event_name == 'workflow_dispatch' || !github.event.repository.private) && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python: ["3.9", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Standard library only; on Windows this adds the time zone data Python lacks there.
+      - name: Install requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Selftests
+        run: python run.py selftest
+
+      - name: Doctor
+        run: python run.py doctor

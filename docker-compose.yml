@@ -1,0 +1,32 @@
+# Runs the bot's loop in a container, restarted after a crash or a reboot.
+#
+#   docker compose up -d --build       start
+#   docker compose logs -f             watch
+#   docker compose down                stop
+#   docker compose run --rm bot doctor run any other command once (selftest, once, ...)
+#
+# The project folder is mounted at /app, so edits to config.json take effect at the next
+# run, and the order ledger, the momentum targets and the paper account are written to your
+# folder and survive the container. A HALT file created in the folder stops all orders.
+#
+# The container runs as user id 1000. On Linux, if `id -u` prints something else, add
+#     user: "<your id>:<your group id>"
+# below, or the bot cannot write the ledger (`run.py doctor` says so).
+
+services:
+  bot:
+    build: .
+    image: halal-momentum-bot
+    # Proposes only, as shipped. To place orders that pass every gate, make this
+    #     command: ["loop", "--execute"]
+    # With broker.adapter "paper" (the default) those orders are simulated. Real money
+    # needs broker.adapter "trading212", execution.environment "live" AND --execute.
+    command: ["loop"]
+    volumes:
+      - ./:/app
+    # Trading 212 credentials, only for broker.adapter "trading212": copy .env.example to
+    # .env. Optional, so the paper account runs without one (needs Docker Compose 2.24+).
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped

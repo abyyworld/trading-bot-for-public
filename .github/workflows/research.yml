@@ -1,0 +1,76 @@
+# Research runs: read-only backtests on GitHub's machines, which can reach Yahoo, Wikipedia
+# and the fund holdings files where a laptop behind a firewall or a container often cannot.
+#
+# Deliberately apart from the trading control panel:
+#   - no secrets at all, so nothing here can read or touch a broker account
+#   - its own concurrency group, so a long research run never queues in front of a trading
+#     run, and queueing research can never cancel a pending trading run
+#   - read-only repository permissions; it commits nothing
+#
+# It runs each non-comment line of research/request.txt as `python3 <line>`, on any push to a
+# branch other than main that changes that file, or from the Actions tab. Daily prices are
+# cached between runs, so only the first run of a day downloads them. The output is on the
+# run summary and attached to the run as research-output.
+
+name: Research (read-only)
+
+on:
+  push:
+    branches-ignore: [main]
+    paths: ["research/request.txt"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # Output in UTF-8 whatever a line prints, so a stray character never ends a run.
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore cached daily prices
+        uses: actions/cache@v4
+        with:
+          path: research/cache
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+
+      - name: Run the requested research
+        run: |
+          set +e
+          set -f
+          # Cached files older than a day are fetched again, so results use current prices.
+          find research/cache -name '*.json' -mtime +0 -delete 2>/dev/null
+          out=research_output.txt
+          : > "$out"
+          while IFS= read -r line || [ -n "$line" ]; do
+            # A file saved on Windows may carry a byte order mark and CRLF line endings.
+            line=${line#$'\xef\xbb\xbf'}
+            line=${line%$'\r'}
+            case "$line" in ''|'#'*) continue ;; esac
+            echo "===== python3 $line" | tee -a "$out"
+            timeout 3600 python3 $line >> "$out" 2>&1
+            echo "===== exit $?" | tee -a "$out"
+          done < research/request.txt
+          cat "$out"
+          { echo '```'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-output
+          path: research_output.txt
+          if-no-files-found: ignore

@@ -1,0 +1,641 @@
+{
+  "version": 1,
+  "about": "Everything this bot reads, in one file: account, broker, compliance, risk, execution, strategy and schedule. Keys named about or note, or ending in _note, are documentation only. Money amounts are in the account currency (account.currency).",
+  "account": {
+    "about": "The account's own currency: GBP, EUR or USD. Cash, the caps in the risk block and every proposal value are in it. Momentum converts US share prices into it through Yahoo's GBPUSD or EURUSD rate; any other currency gets no outside price, so no momentum buy. The paper adapter fixes its state file to this currency when it creates it.",
+    "currency": "GBP"
+  },
+  "broker": {
+    "about": "Which broker the bot talks to. adapter 'paper' (the default) is a simulated account kept in a local file by brokers/paper.py: no credentials, no real money. 'trading212' is Trading 212's REST API, whose paths and auth below come from Trading 212's own published agent skill at github.com/trading212-labs/agent-skills, not from guesswork. Any other name is a module in brokers/, written from brokers/template.py.",
+    "adapter": "paper",
+    "environment": "demo",
+    "environment_note": "Which Trading 212 server broker.py talks to when run on its own; --env overrides it. Keep it equal to execution.environment, which is what trade.py uses. Means nothing to the paper adapter.",
+    "environments": {
+      "demo": "https://demo.trading212.com/api/v0",
+      "live": "https://live.trading212.com/api/v0"
+    },
+    "auth": {
+      "scheme": "basic_key_secret",
+      "header": "Authorization: Basic base64(KEY:SECRET)",
+      "key_env_var": "T212_API_KEY",
+      "secret_env_var": "T212_API_SECRET",
+      "note": "Two values, not one. A single key with no secret cannot authenticate under any header format and returns 401. Keys are bound to one environment and one account type: demo and live need different pairs, and so do Invest and Stocks ISA. Set them as environment variables or in a .env file in the project folder, which must never be committed."
+    },
+    "ticker_format": {
+      "note": "Trading 212 uses its own instrument identifiers, for example AAPL_US_EQ rather than AAPL. Allowlist entries in config.json must use the exact string the instruments endpoint returns, or an order will be rejected or, worse, hit the wrong instrument. Case matters to the broker: London listings end in a lower-case l (MWIXl_EQ), and MWIXL_EQ is refused.",
+      "lookup": "python3 broker.py instruments <search>"
+    },
+    "request_delay_seconds": 5,
+    "rate_limits": {
+      "note": "From the published skill. A monthly rebuild places a few dozen orders, far inside them; they only rule out intraday trading, which this project does not attempt.",
+      "market_orders_per_minute": 50,
+      "instruments_seconds_between": 50
+    },
+    "endpoints": {
+      "account_summary": "/equity/account/summary",
+      "positions": "/equity/positions",
+      "pending_orders": "/equity/orders",
+      "instruments": "/equity/metadata/instruments",
+      "exchanges": "/equity/metadata/exchanges",
+      "history_orders": "/equity/history/orders",
+      "history_dividends": "/equity/history/dividends",
+      "history_transactions": "/equity/history/transactions",
+      "place_market_order": "/equity/orders/market",
+      "cancel_order": "/equity/orders/{id}"
+    },
+    "order_payload": {
+      "note": "The market order body is {ticker, quantity}, plus an optional extendedHours this code never sets. There is NO monetary value field in the public API (the app's buy-by-value is not exposed to it), so an amount is converted to a fractional quantity first, in sizing.py. Buy and sell are the SIGN of quantity, not a side field.",
+      "positive_quantity": "buy",
+      "negative_quantity": "sell",
+      "quantity_decimals": 4,
+      "not_idempotent": "Trading 212 warns that duplicate requests may create duplicate orders. There is no server-side dedupe, so the client keeps its own ledger, written before each request: one file per account (sizing.ledger_path), orders_placed.json for live and orders_placed.demo.json for demo, so one account's orders never count against another's daily cap."
+    },
+    "paper": {
+      "about": "Settings for adapter 'paper' (brokers/paper.py). The account lives in state_file, relative to the project folder, and starts with starting_cash in the account currency; brokers/paper.py reset starts it again. fx_fee (Trading 212's 0.15% conversion fee) is charged on any instrument not in the account currency, buying and selling. A buy may use at most (1 - hold) of free cash, as on Trading 212; keep it equal to risk.broker_hold. US shares are listed automatically; symbols lists everything else, such as the core fund, with its Yahoo symbol and price_unit (0.01 for a line quoted in pence, GBX on Trading 212).",
+      "state_file": "paper_account.json",
+      "starting_cash": 10000.0,
+      "fx_fee": 0.0015,
+      "hold": 0.05,
+      "symbols": {
+        "MWIXl_EQ": {
+          "yahoo": "MWIX.L",
+          "price_unit": 0.01,
+          "currency": "GBP",
+          "venue": "LSE",
+          "name": "Invesco MSCI ACWI Islamic M-Series UCITS ETF (Acc), GBX line",
+          "isin": "IE000LFC57H7",
+          "note": "Check the Yahoo symbol before trusting a paper fill: open finance.yahoo.com/quote/MWIX.L and confirm it is this fund, ISIN IE000LFC57H7, quoted in pence (GBp). A wrong symbol prices every paper trade of the core fund wrongly."
+        }
+      }
+    }
+  },
+  "compliance": {
+    "about": "Sharia screening, as an ALLOWLIST rather than a blocklist. A blocklist fails open: anything it has not heard of gets bought. Nothing may be bought unless it appears in the allowlist below, or is one of this month's momentum picks, which come only from the screened universe (screen below, universe.py) and are buyable only by momentum proposals, only in the month they were picked (gates.extra_allowlist). Selling is never allowlist-gated, so a holding that fails the screen can always be exited.",
+    "disclaimer": "This code filters, it does not certify. What is in the allowlist and the screen is a judgement, yours and your scholar's, and purification of incidental non-compliant income is not handled here at all.",
+    "allowlist_only": true,
+    "allowlist": [
+      {
+        "ticker": "MWIXl_EQ",
+        "name": "Invesco MSCI ACWI Islamic M-Series UCITS ETF (Acc), GBX line",
+        "isin": "IE000LFC57H7",
+        "currency": "GBX",
+        "source": "MSCI ACWI Islamic index (fund factsheet); verify yourself",
+        "checked_on": "2026-10-08",
+        "why_this_one": "All-country (developed plus emerging markets), accumulating, and a passive tracker of an MSCI Islamic index, whose screens are AAOIFI-derived and consistent with ratio_limits below. A mechanical strategy suits a passive core.",
+        "currency_note": "The line for a GBP account: GBX is pence, so no FX fee. Once held, the bot prices it from walletImpact.currentValue / quantity, which Trading 212 reports in the account currency, so the factor of 100 never reaches sizing. Never put a GBX price into prices.csv without dividing by 100."
+      },
+      {
+        "ticker": "MWIMl_EQ",
+        "name": "Invesco MSCI ACWI Islamic M-Series UCITS ETF (Acc), USD line",
+        "isin": "IE000LFC57H7",
+        "currency": "USD",
+        "source": "MSCI ACWI Islamic index (fund factsheet); verify yourself",
+        "checked_on": "2026-10-08",
+        "currency_note": "The same fund and ISIN as MWIXl_EQ, quoted in dollars: the line for a USD account. A third line, MWIMs_EQ, is in CHF. Buy the line in the account currency: any other pays Trading 212's 0.15% FX fee on every buy and every sell. To use it, set strategy.momentum.core_ticker to it and, for paper trading, add it to broker.paper.symbols with its Yahoo symbol."
+      }
+    ],
+    "allowlist_entry_format": {
+      "ticker": "the Trading 212 instrument ticker, exactly as their API returns it",
+      "name": "the human name, so a mistyped ticker is obvious on sight",
+      "source": "where the compliance judgement came from, named",
+      "checked_on": "YYYY-MM-DD, so a stale screen is visible"
+    },
+    "suggested_sources": [
+      "The holdings or index of a Sharia compliant fund, for example the S&P 500 Shariah, Dow Jones Islamic Market or MSCI Islamic index series. US-domiciled ETFs such as SPUS and HLAL cannot be bought by UK or EU retail investors under PRIIPs, so in Europe a UCITS fund like the core fund above is the usual route.",
+      "A screening service such as Zoya or Musaffa, which publish a per company verdict and the ratios behind it."
+    ],
+    "excluded_activities": [
+      "alcohol",
+      "tobacco",
+      "pork and other non-halal food",
+      "gambling and casinos",
+      "conventional banking, lending and insurance, being interest based",
+      "adult entertainment",
+      "weapons and defence",
+      "cannabis"
+    ],
+    "screen": {
+      "about": "The momentum universe's standard: 'not haram' rather than 'labelled halal'. A company is out only if its core business is one of excluded_activities above; financial-ratio screens do not decide it, and a stock no screener has labelled is fine if it is not haram. universe.py applies this to the members of an index (strategy.momentum.indexes). It FAILS CLOSED: a row is kept only if its GICS sub-industry is in permitted_sub_industries, so a blank cell, a footnote or a renamed label is dropped and reported, never let through; and if any canary is kept, or the rules are missing, the whole list is refused and SPUS's holdings are used instead, with excluded_symbols still applied. A named exclusion beats everything; a named allowance beats a sub-industry exclusion. Picks are re-screened every run, so an exclusion added mid-month revokes a pick at once. The lists were reviewed on 2026-10-07 with revenue shares from the companies' filings as then known, not re-read, so recheck them yearly. The closest calls say 'Closest call' in their reasons: a stricter reading moves them to excluded_symbols.",
+      "excluded_sub_industries": [
+        {
+          "name": "Diversified Banks",
+          "activity": "interest"
+        },
+        {
+          "name": "Regional Banks",
+          "activity": "interest"
+        },
+        {
+          "name": "Consumer Finance",
+          "activity": "interest"
+        },
+        {
+          "name": "Commercial & Residential Mortgage Finance",
+          "activity": "interest"
+        },
+        {
+          "name": "Thrifts & Mortgage Finance",
+          "activity": "interest"
+        },
+        {
+          "name": "Diversified Financial Services",
+          "activity": "interest"
+        },
+        {
+          "name": "Specialized Finance",
+          "activity": "interest"
+        },
+        {
+          "name": "Other Specialized Finance",
+          "activity": "interest"
+        },
+        {
+          "name": "Multi-Sector Holdings",
+          "activity": "insurance"
+        },
+        {
+          "name": "Asset Management & Custody Banks",
+          "activity": "interest"
+        },
+        {
+          "name": "Investment Banking & Brokerage",
+          "activity": "interest"
+        },
+        {
+          "name": "Diversified Capital Markets",
+          "activity": "interest"
+        },
+        {
+          "name": "Financial Exchanges & Data",
+          "activity": "interest"
+        },
+        {
+          "name": "Insurance Brokers",
+          "activity": "insurance"
+        },
+        {
+          "name": "Life & Health Insurance",
+          "activity": "insurance"
+        },
+        {
+          "name": "Multi-line Insurance",
+          "activity": "insurance"
+        },
+        {
+          "name": "Property & Casualty Insurance",
+          "activity": "insurance"
+        },
+        {
+          "name": "Reinsurance",
+          "activity": "insurance"
+        },
+        {
+          "name": "Mortgage REITs",
+          "activity": "interest"
+        },
+        {
+          "name": "Brewers",
+          "activity": "alcohol"
+        },
+        {
+          "name": "Distillers & Vintners",
+          "activity": "alcohol"
+        },
+        {
+          "name": "Tobacco",
+          "activity": "tobacco"
+        },
+        {
+          "name": "Casinos & Gaming",
+          "activity": "gambling"
+        },
+        {
+          "name": "Aerospace & Defense",
+          "activity": "weapons and defence"
+        },
+        {
+          "name": "Managed Health Care",
+          "activity": "insurance"
+        }
+      ],
+      "excluded_symbols": [
+        {
+          "symbol": "HRL",
+          "activity": "pork",
+          "reason": "Hormel: pork is its main raw material and its biggest brands (SPAM, bacon, Applegate) are pork; filed under Packaged Foods & Meats"
+        },
+        {
+          "symbol": "VICI",
+          "activity": "gambling",
+          "reason": "VICI Properties: landlord whose rent comes mostly from casino resorts (Caesars Palace, MGM Grand, the Venetian)"
+        },
+        {
+          "symbol": "GLPI",
+          "activity": "gambling",
+          "reason": "Gaming and Leisure Properties: essentially all rent from casino operators (S&P 400)"
+        },
+        {
+          "symbol": "LDOS",
+          "activity": "weapons and defence",
+          "reason": "Leidos: about 45-50% of revenue is US defence and intelligence; filed under Diversified Support Services. Closest call: on a strict 50% rule it is borderline, excluded by default as weapons and defence"
+        },
+        {
+          "symbol": "BAH",
+          "activity": "weapons and defence",
+          "reason": "Booz Allen Hamilton: about two thirds defence and intelligence (S&P 400)"
+        },
+        {
+          "symbol": "CACI",
+          "activity": "weapons and defence",
+          "reason": "CACI: about three quarters Department of Defense (S&P 400)"
+        },
+        {
+          "symbol": "SAIC",
+          "activity": "weapons and defence",
+          "reason": "SAIC: about three quarters defence and intelligence (S&P 400)"
+        },
+        {
+          "symbol": "KBR",
+          "activity": "weapons and defence",
+          "reason": "KBR: mission work for militaries is about three quarters of revenue (S&P 400); low confidence"
+        },
+        {
+          "symbol": "CDP",
+          "activity": "weapons and defence",
+          "reason": "COPT Defense Properties: offices beside US military and intelligence installations (S&P 400); medium confidence"
+        }
+      ],
+      "allowed_symbols": {
+        "FDS": "FactSet: financial data, filed under Financial Exchanges & Data; sells data, does not lend or insure",
+        "MSCI": "MSCI: indexes and analytics, filed under Financial Exchanges & Data",
+        "SPGI": "S&P Global: data, indexes and ratings; does not lend or insure. Closest call among the data firms: ratings serve the bond market",
+        "MCO": "Moody's: ratings and analytics; does not lend or insure. Closest call among the data firms: ratings serve the bond market",
+        "MORN": "Morningstar: fund research and data (S&P 400)",
+        "NDAQ": "Nasdaq Inc: equity exchange, data and market software, not a derivatives clearing house",
+        "BLK": "BlackRock: paid fees to manage mostly equity and multi-asset funds; asset management is not lending or insurance",
+        "TROW": "T. Rowe Price: fee-paid, mostly equity fund manager",
+        "IVZ": "Invesco: fee-paid, mostly equity and ETF manager (it runs the core fund's index product)",
+        "BEN": "Franklin Resources: fee-paid fund manager",
+        "EVR": "Evercore: M&A advisory fees are the core (S&P 400)",
+        "HLI": "Houlihan Lokey: advisory fees are the core (S&P 400)",
+        "BA": "Boeing: commercial airplanes and services are about two thirds of revenue. Closest call: defence is about a third",
+        "GE": "GE Aerospace: commercial jet engines about 70% of revenue, defence roughly 15-20%",
+        "HWM": "Howmet: forgings and fasteners, commercial aerospace and trucks; defence about a sixth",
+        "HONA": "Honeywell Aerospace: commercial original equipment and aftermarket the majority; defence and space about 35-40%",
+        "TXT": "Textron: Cessna, Beechcraft and industrial products the majority. Closest call: Bell and Textron Systems make it about a third defence",
+        "TDG": "TransDigm: aircraft components, commercial the majority. Closest call: defence is about 40%",
+        "AXON": "Axon: body cameras and evidence software the majority, police customers. Closest call: TASER devices are roughly a third",
+        "HXL": "Hexcel: carbon fibre mostly for commercial aircraft (S&P 400)",
+        "ATI": "ATI: specialty alloys mostly for commercial engines (S&P 400)",
+        "SARO": "StandardAero: engine maintenance, mostly commercial (S&P 400)",
+        "TSN": "Tyson: beef and chicken are most of sales, pork about a tenth, so pork is not its core",
+        "KHC": "Kraft Heinz: Oscar Mayer pork lines about a tenth of sales; recheck after its announced split",
+        "CCL": "Carnival: tickets are about two thirds of revenue; onboard bars and casinos are part of the rest. Closest call",
+        "RCL": "Royal Caribbean: as Carnival. Closest call",
+        "NCLH": "Norwegian Cruise Line: as Carnival. Closest call",
+        "PLTR": "Palantir: government is about half of revenue including civil agencies; defence perhaps 35 to 45%, not its core; watch list"
+      },
+      "canaries": [
+        "JPM",
+        "BAC",
+        "WFC",
+        "AIG",
+        "MET",
+        "MO",
+        "PM",
+        "LVS",
+        "MGM",
+        "STZ",
+        "TAP",
+        "LMT",
+        "NOC",
+        "UNH",
+        "HRL",
+        "VICI",
+        "CME"
+      ],
+      "permitted_sub_industries": [
+        "Oil & Gas Drilling",
+        "Oil & Gas Equipment & Services",
+        "Integrated Oil & Gas",
+        "Oil & Gas Exploration & Production",
+        "Oil & Gas Refining & Marketing",
+        "Oil & Gas Storage & Transportation",
+        "Coal & Consumable Fuels",
+        "Commodity Chemicals",
+        "Diversified Chemicals",
+        "Fertilizers & Agricultural Chemicals",
+        "Industrial Gases",
+        "Specialty Chemicals",
+        "Construction Materials",
+        "Metal, Glass & Plastic Containers",
+        "Paper & Plastic Packaging Products & Materials",
+        "Paper Packaging",
+        "Aluminum",
+        "Diversified Metals & Mining",
+        "Copper",
+        "Gold",
+        "Precious Metals & Minerals",
+        "Silver",
+        "Steel",
+        "Forest Products",
+        "Paper Products",
+        "Building Products",
+        "Construction & Engineering",
+        "Electrical Components & Equipment",
+        "Heavy Electrical Equipment",
+        "Industrial Conglomerates",
+        "Construction Machinery & Heavy Transportation Equipment",
+        "Construction Machinery & Heavy Trucks",
+        "Agricultural & Farm Machinery",
+        "Industrial Machinery & Supplies & Components",
+        "Industrial Machinery",
+        "Trading Companies & Distributors",
+        "Commercial Printing",
+        "Environmental & Facilities Services",
+        "Office Services & Supplies",
+        "Diversified Support Services",
+        "Security & Alarm Services",
+        "Human Resource & Employment Services",
+        "Research & Consulting Services",
+        "Data Processing & Outsourced Services",
+        "Air Freight & Logistics",
+        "Passenger Airlines",
+        "Airlines",
+        "Marine Transportation",
+        "Marine",
+        "Railroads",
+        "Rail Transportation",
+        "Cargo Ground Transportation",
+        "Passenger Ground Transportation",
+        "Trucking",
+        "Airport Services",
+        "Highways & Railtracks",
+        "Marine Ports & Services",
+        "Automotive Parts & Equipment",
+        "Auto Parts & Equipment",
+        "Tires & Rubber",
+        "Automobile Manufacturers",
+        "Motorcycle Manufacturers",
+        "Consumer Electronics",
+        "Home Furnishings",
+        "Homebuilding",
+        "Household Appliances",
+        "Housewares & Specialties",
+        "Leisure Products",
+        "Apparel, Accessories & Luxury Goods",
+        "Footwear",
+        "Textiles",
+        "Hotels, Resorts & Cruise Lines",
+        "Leisure Facilities",
+        "Restaurants",
+        "Education Services",
+        "Specialized Consumer Services",
+        "Distributors",
+        "Broadline Retail",
+        "Internet & Direct Marketing Retail",
+        "General Merchandise Stores",
+        "Department Stores",
+        "Apparel Retail",
+        "Computer & Electronics Retail",
+        "Home Improvement Retail",
+        "Other Specialty Retail",
+        "Specialty Stores",
+        "Automotive Retail",
+        "Homefurnishing Retail",
+        "Drug Retail",
+        "Food Distributors",
+        "Food Retail",
+        "Consumer Staples Merchandise Retail",
+        "Hypermarkets & Super Centers",
+        "Soft Drinks & Non-alcoholic Beverages",
+        "Soft Drinks",
+        "Agricultural Products & Services",
+        "Agricultural Products",
+        "Packaged Foods & Meats",
+        "Household Products",
+        "Personal Care Products",
+        "Personal Products",
+        "Health Care Equipment",
+        "Health Care Supplies",
+        "Health Care Distributors",
+        "Health Care Services",
+        "Health Care Facilities",
+        "Health Care Technology",
+        "Biotechnology",
+        "Pharmaceuticals",
+        "Life Sciences Tools & Services",
+        "Transaction & Payment Processing Services",
+        "IT Consulting & Other Services",
+        "Internet Services & Infrastructure",
+        "Application Software",
+        "Systems Software",
+        "Communications Equipment",
+        "Technology Hardware, Storage & Peripherals",
+        "Electronic Equipment & Instruments",
+        "Electronic Components",
+        "Electronic Manufacturing Services",
+        "Technology Distributors",
+        "Semiconductor Materials & Equipment",
+        "Semiconductor Equipment",
+        "Semiconductors",
+        "Alternative Carriers",
+        "Integrated Telecommunication Services",
+        "Wireless Telecommunication Services",
+        "Advertising",
+        "Broadcasting",
+        "Cable & Satellite",
+        "Publishing",
+        "Movies & Entertainment",
+        "Interactive Home Entertainment",
+        "Interactive Media & Services",
+        "Electric Utilities",
+        "Gas Utilities",
+        "Multi-Utilities",
+        "Water Utilities",
+        "Independent Power Producers & Energy Traders",
+        "Renewable Electricity",
+        "Diversified REITs",
+        "Industrial REITs",
+        "Hotel & Resort REITs",
+        "Office REITs",
+        "Health Care REITs",
+        "Multi-Family Residential REITs",
+        "Single-Family Residential REITs",
+        "Residential REITs",
+        "Retail REITs",
+        "Other Specialized REITs",
+        "Specialized REITs",
+        "Self-Storage REITs",
+        "Telecom Tower REITs",
+        "Timber REITs",
+        "Data Center REITs",
+        "Diversified Real Estate Activities",
+        "Real Estate Operating Companies",
+        "Real Estate Development",
+        "Real Estate Services"
+      ]
+    },
+    "ratio_limits": {
+      "about": "AAOIFI style thresholds, recorded so an allowlist entry can be audited by a human. This code does not compute them: Trading 212's API returns no company financials. Standards differ, AAOIFI commonly uses 30 percent where the Dow Jones Islamic Market screens use 33.",
+      "interest_bearing_debt_to_market_cap": 0.3,
+      "cash_and_interest_securities_to_market_cap": 0.3,
+      "non_compliant_revenue_share": 0.05
+    }
+  },
+  "risk": {
+    "about": "Hard limits, checked in gates.py on every proposal whatever produced it. A proposal failing any single check is dropped and the reason recorded. Amounts are in the account currency. The defaults suit an account of roughly 10,000 to 20,000; see caps_note and position_cap_note to scale them.",
+    "max_order_value": 2500.0,
+    "max_daily_spend": 7000.0,
+    "max_orders_per_day": 60,
+    "caps_note": "Buys only: a sell is never value-capped, so no holding can be trapped. Keep max_order_value at least one pick's share, (1 - core_weight) / picks of the account, and the core fund's monthly top-up: momentum cuts a bigger buy down to it and leaves the rest for a later run. max_daily_spend spans every run of a day, counted from the ledger by sizing.spent_on: keep it under the account's value, so one bad day cannot spend everything; a build bigger than it finishes on the next day's runs. max_orders_per_day leaves room for a full rebuild (ten sells, eleven buys) and its retries. Lower all three for a first real-money run.",
+    "max_position_value": 1500.0,
+    "max_position_value_by_ticker": {
+      "MWIXl_EQ": 100000.0,
+      "MWIMl_EQ": 100000.0
+    },
+    "position_cap_note": "max_position_value caps every single stock. A pick's share is (1 - core_weight) / picks of the account, 8% at the defaults, so it passes 1,500 once the account passes about 18,750; past that a pick is bought up to the cap and the rest of its share stays in cash, so raise the cap as the account grows. The core fund lines have their own cap in max_position_value_by_ticker because the fund is diversified and meant to hold core_weight of the whole account: under the single-stock cap every buy of it would be refused once the account passed max_position_value / core_weight. Its cap is a ceiling against a typo, not a concentration limit; keep it above core_weight times the account.",
+    "near_high": {
+      "enabled": false,
+      "min_below_high": 0.05,
+      "window_days": 252,
+      "max_staleness_days": 5,
+      "exempt": [
+        "MWIXl_EQ",
+        "MWIMl_EQ",
+        "MWIMs_EQ"
+      ],
+      "about": "Optional, off by default: do not BUY a single stock within min_below_high of its highest close over the last window_days trading days (52 weeks). Sells are never held back. Off because backtest.py's mom10_rule row found momentum under this rule lost return in every window tested; the evidence is that stocks near their 52-week high do slightly better afterwards (George and Hwang 2004 and replications). The core fund is exempt by name: an index sits near its high most of the time, so the rule would mostly hold cash. Fails closed when on: with no price history, too little, or stale, the buy is refused."
+    },
+    "min_position_remainder": 2.0,
+    "min_position_remainder_note": "Left behind, in the account currency, when selling a whole holding that has more than 4 decimal places, which a purchase by value in the Trading 212 app can leave (up to 8). Trading 212 takes at most 4 places, refuses a sell of more than is held ('selling-equity-not-owned'), and refuses one that leaves a sliver ('must have opened position at least 1.00', in an undocumented unit), so such a holding is sold down to this remainder rather than not at all. A holding the bot bought itself fits in 4 places and is sold exactly. See sizing.sell_quantity. Raise it if a whole exit is still refused with the 1.00 message; buy by number of shares in the app to avoid remainders.",
+    "min_cash_buffer": 20.0,
+    "broker_hold": 0.05,
+    "broker_hold_note": "Trading 212 takes a market buy only up to about 95% of free funds, holding the rest against the price moving before the fill (per its community forum; undocumented). gates.check counts every buy as value / (1 - broker_hold) against the cash, and momentum.proposals sizes the same way, so a buy the gate passes is not then refused by the broker as insufficient funds with cash apparently to spare. Raise it if a buy the gate passed is refused for funds. Keep broker.paper.hold equal to it.",
+    "cooldown_hours_per_instrument": 120,
+    "cooldown_note": "No second order in the same instrument, buy or sell, within this many hours of the last, counted from the broker's order history. A run that fires twice, or a retry after a timeout, cannot double an order.",
+    "min_confidence": 0.7,
+    "min_confidence_note": "Rules and momentum propose at confidence 1.0; anything below this floor is dropped.",
+    "allow_buy": true,
+    "allow_sell": true,
+    "killswitch_file": "HALT",
+    "killswitch_note": "Create a file named HALT in the project folder and order placement stops: every run checks for it before placing anything and reports that it is halted. Delete it to resume. It takes precedence over every other setting here."
+  },
+  "execution": {
+    "about": "execute true lets a run place what survives every gate, when the command line also says --execute; false makes every run propose only. With the paper adapter nothing real is ever sent. Real money takes three deliberate changes: broker.adapter 'trading212', environment 'live', and --execute on the command line.",
+    "execute": true,
+    "environment": "demo",
+    "environment_note": "'demo' or 'live', Trading 212's two servers, with credentials of their own. Only meaningful with broker.adapter 'trading212'; trade.py --env overrides it.",
+    "require_market_open": true,
+    "second_pass": {
+      "enabled": true,
+      "wait_seconds": 10,
+      "polls": 6,
+      "about": "trade.second_pass. After a run places a sell, wait until every order the broker accepted shows in the positions (up to polls x wait_seconds), read the account again and BUY what the sale's cash now pays for, under the same gates, sizing, ledger and market hours. It never sells. It fails closed: an order with no answer, a positions, cash or history read that is refused or short, or a holding missing from the fresh read means no second pass. On Trading 212 a sale's cash has been seen spendable within a minute; without this it waits for the next run. Switch off with enabled false."
+    },
+    "market_hours_fallback": {
+      "about": "Trading 212's exchanges endpoint returns European and Canadian venues but not NYSE or Nasdaq, so US shares resolve to no published schedule. Keyed by ticker suffix (keys starting with an underscore). Read in New York's own clock, so daylight saving is handled, with the NYSE's holidays and early closes. Every other venue, the LSE included, comes from the broker's own published schedule. Extend holidays and early_close before holidays_known_through: past it the gate trades on every weekday and says it does not know the holidays.",
+      "_US_EQ": {
+        "name": "US equities (NYSE and Nasdaq)",
+        "timezone": "America/New_York",
+        "open_local": "09:30",
+        "close_local": "16:00",
+        "holidays": [
+          "2026-11-26",
+          "2026-12-25",
+          "2027-01-01",
+          "2027-01-18",
+          "2027-02-15",
+          "2027-03-26",
+          "2027-05-31",
+          "2027-06-18",
+          "2027-07-05",
+          "2027-09-06",
+          "2027-11-25",
+          "2027-12-24"
+        ],
+        "early_close": {
+          "2026-11-27": "13:00",
+          "2026-12-24": "13:00",
+          "2027-11-26": "13:00"
+        },
+        "holidays_known_through": "2027-12-31",
+        "source": "NYSE Group's 2026, 2027 and 2028 holiday and early closings calendar, announced 2025-12-23. Nasdaq keeps the same days."
+      }
+    }
+  },
+  "strategy": {
+    "about": "What produces proposals. mode 'rules' is the only engine: scheduled buys and the rebalance from rules.py, both off by default, with signals as an optional brake on scheduled buys. The momentum book (momentum.py) runs alongside whenever it is enabled, and is the default strategy. Every proposal, whatever its source, passes gates.py.",
+    "mode": "rules",
+    "scheduled_buys": [
+      {
+        "ticker": "MWIXl_EQ",
+        "value": 250.0,
+        "every_days": 7,
+        "enabled": false,
+        "note": "An example, off: a fixed amount into the core fund every every_days days, to drip-feed new money in. Off by default because the momentum book keeps the core fund at core_weight, and at its next build trims back whatever this adds. Use the core line in the account currency."
+      }
+    ],
+    "signals": {
+      "about": "Price analysis, computed from prices.csv by arithmetic. Signals can only BLOCK a scheduled buy, never create one, so the schedule stays the thing driving it and the signal is only a brake. Read the header of signals.py before switching this on: a trend filter is a risk control, not an edge, and it makes you late to every recovery in exchange for missing some of each decline.",
+      "enabled": false,
+      "require_above_sma": false,
+      "trend_window_days": 200,
+      "min_drawdown_to_buy": null,
+      "drawdown_window_days": 250,
+      "momentum_window_days": 250,
+      "fail_closed_note": "With this enabled and not enough price history, every buy is blocked and the shortfall is reported. Treating unknown as fine is how a filter stops being a filter."
+    },
+    "rebalance": {
+      "about": "Hold target weights, correcting them only once drift passes drift_tolerance; correcting every wobble just pays the spread repeatedly, and a correction under min_trade_value is not placed. Off, with no targets: the momentum book sets the allocation, and the two would trade against each other. To use it instead, switch momentum off and give targets as {TICKER: weight}, every buy target on the allowlist. Its sells are not value-capped.",
+      "enabled": false,
+      "targets": {},
+      "drift_tolerance": 0.05,
+      "min_trade_value": 10.0,
+      "include_cash_in_total": false
+    },
+    "momentum": {
+      "about": "momentum.py. core_weight of the account in the core fund (core_ticker), the rest split evenly across the top 'picks' not-haram stocks by 12-1 momentum, rebuilt on the first run of each month from the universe below and traded only in the window_days after the build. mode 'shadow' runs it end to end and sends nothing; 'live' sends, through gates.py like any other proposal, so the risk caps bind every order. A share is left alone while it is within band of its target, so drift alone does not churn, and no order under min_trade is proposed. The monthly targets are written to file in the project folder.",
+      "enabled": true,
+      "mode": "live",
+      "core_ticker": "MWIXl_EQ",
+      "core_weight": 0.2,
+      "core_weight_note": "0.2 is 20% core fund, 80% momentum. In research.py (2026-10-07; 2007-11 to 2026-09, point in time, filled the next day) 60/40 made 15.2% a year (worst fall -45.1%), 40/60 15.9% (-46.8%), 20/80 16.4% (-48.9%), and momentum alone 16.2% (-53.7%). All are flattered: the core leg is a survivor-only stand-in for the fund and delisted stocks are missing. A larger core_weight gives up return for a shallower worst fall: about half a point a year at 0.4 and about 1.2 points at 0.6. Use a core_ticker in the account currency.",
+      "picks": 10,
+      "band": 0.1,
+      "window_days": 7,
+      "min_trade": 25.0,
+      "cut_hold": 0.1,
+      "cut_hold_note": "A buy momentum.proposals sizes to the remaining cash, rather than to its full share, is sized to survive a broker hold this large, above risk.broker_hold. Trading 212 does not document its real hold, real orders bound it only loosely (up to nearly 10%), and a refused buy blocks a retry for the rest of the day, which in a 7-day window can cost the month. The price is a little cash idle until the next build. Whole shares are still judged by the gate at broker_hold.",
+      "min_universe": 100,
+      "universe": "not_haram",
+      "indexes": [
+        "sp500"
+      ],
+      "universe_note": "'not_haram': the members of indexes, the S&P 500, minus haram businesses per compliance.screen, rather than SPUS's label. SPUS's holdings file (universe_url) is still read: as the fallback when the index list cannot be read, the screen is not trusted or it leaves under min_universe names, and for the independent reference price of a pick SPUS holds; a pick it does not hold is checked against Nasdaq instead, and is then never sized from Nasdaq. 'spus' uses SPUS's holdings directly. In research.py's pre-registered test the not-haram list did as well as SPUS's: 16.7% a year against 16.9%, 35.7% against 33.8% over the last five years, worst fall -51.1% against -52.2%. The S&P 400 test was inconclusive (its members carry no join dates), so the list is the S&P 500 alone.",
+      "price_check_tolerance": 0.25,
+      "price_check_note": "A pick not yet held is priced from Yahoo's dollar close converted to the account currency, and refused unless it is within this fraction of the reference price taken at the build from an independent source. A pick with no such reference is skipped for the next in line, never bought on one source.",
+      "universe_url": "https://www.sp-funds.com/wp-content/uploads/data/TidalFG_Holdings_SPUS.csv",
+      "file": "momentum_targets.json"
+    }
+  },
+  "schedule": {
+    "about": "When python3 run.py loop runs, in UTC: 08:17 to 12:17 inside the London session for the core fund, and 13:47 to 20:47 for New York's, seven of them inside the US session in both summer and winter time. A run outside a market's hours places nothing there (execution.require_market_open), and a run on a day with nothing to do changes nothing, so extra runs are safe. weekdays_only skips Saturday and Sunday.",
+    "utc_times": [
+      "08:17",
+      "09:17",
+      "10:17",
+      "11:17",
+      "12:17",
+      "13:47",
+      "14:47",
+      "15:47",
+      "16:47",
+      "17:47",
+      "18:47",
+      "19:47",
+      "20:47"
+    ],
+    "weekdays_only": true
+  }
+}

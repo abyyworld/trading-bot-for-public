@@ -1,0 +1,10 @@
+# Kept out of the image. docker-compose.yml mounts the project folder over /app anyway, so
+# the running bot sees your files; this keeps credentials and clutter out of the image.
+.git
+.github
+.env
+.venv
+__pycache__
+**/__pycache__
+**/*.pyc
+research/cache
