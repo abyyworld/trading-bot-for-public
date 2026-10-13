@@ -51,7 +51,7 @@
       "not_idempotent": "Trading 212 warns that duplicate requests may create duplicate orders. There is no server-side dedupe, so the client keeps its own ledger, written before each request: one file per account (sizing.ledger_path), orders_placed.json for live and orders_placed.demo.json for demo, so one account's orders never count against another's daily cap."
     },
     "paper": {
-      "about": "Settings for adapter 'paper' (brokers/paper.py). The account lives in state_file, relative to the project folder, and starts with starting_cash in the account currency; brokers/paper.py reset starts it again. fx_fee (Trading 212's 0.15% conversion fee) is charged on any instrument not in the account currency, buying and selling. A buy may use at most (1 - hold) of free cash, as on Trading 212; keep it equal to risk.broker_hold. US shares are listed automatically; symbols lists everything else, such as the core fund, with its Yahoo symbol and price_unit (0.01 for a line quoted in pence, GBX on Trading 212).",
+      "about": "Settings for adapter 'paper' (brokers/paper.py). The account lives in state_file, relative to the project folder, and starts with starting_cash in the account currency; brokers/paper.py reset starts it again. fx_fee (Trading 212's 0.15% conversion fee) is charged on any instrument not in the account currency, buying and selling. A buy may use at most (1 - hold) of free cash, as on Trading 212; keep it equal to risk.broker_hold. US shares are listed automatically; symbols lists everything else, such as the core fund, with its Yahoo symbol and price_unit (0.01 for a line quoted in pence, GBX on Trading 212), and decimals where the instrument takes fewer than 4 decimal places in an order (the core fund takes 2), so a paper order is refused as Trading 212 would refuse it.",
       "state_file": "paper_account.json",
       "starting_cash": 10000.0,
       "fx_fee": 0.0015,
@@ -64,6 +64,7 @@
           "venue": "LSE",
           "name": "Invesco MSCI ACWI Islamic M-Series UCITS ETF (Acc), GBX line",
           "isin": "IE000LFC57H7",
+          "decimals": 2,
           "note": "Check the Yahoo symbol before trusting a paper fill: open finance.yahoo.com/quote/MWIX.L and confirm it is this fund, ISIN IE000LFC57H7, quoted in pence (GBp). A wrong symbol prices every paper trade of the core fund wrongly."
         }
       }
@@ -509,6 +510,10 @@
     },
     "min_position_remainder": 2.0,
     "min_position_remainder_note": "Left behind, in the account currency, when selling a whole holding that has more than 4 decimal places, which a purchase by value in the Trading 212 app can leave (up to 8). Trading 212 takes at most 4 places, refuses a sell of more than is held ('selling-equity-not-owned'), and refuses one that leaves a sliver ('must have opened position at least 1.00', in an undocumented unit), so such a holding is sold down to this remainder rather than not at all. A holding the bot bought itself fits in 4 places and is sold exactly. See sizing.sell_quantity. Raise it if a whole exit is still refused with the 1.00 message; buy by number of shares in the app to avoid remainders.",
+    "quantity_decimals_by_ticker": {
+      "MWIXl_EQ": 2
+    },
+    "quantity_decimals_by_ticker_note": "Decimal places of a share Trading 212 takes for an instrument, where it is fewer than 4. It is set per instrument and the API does not publish it: the London core fund MWIXl_EQ takes 2, and a partial sell of it sized at 4 places is refused as 'invalid quantity precision 2'. Anything unlisted is sized at 4 places, and trade.place sends a refused order once more at the places the refusal names and prints a reminder to list it here. See sizing.decimals_for.",
     "min_cash_buffer": 20.0,
     "broker_hold": 0.05,
     "broker_hold_note": "Trading 212 takes a market buy only up to about 95% of free funds, holding the rest against the price moving before the fill (per its community forum; undocumented). gates.check counts every buy as value / (1 - broker_hold) against the cash, and momentum.proposals sizes the same way, so a buy the gate passes is not then refused by the broker as insufficient funds with cash apparently to spare. Raise it if a buy the gate passed is refused for funds. Keep broker.paper.hold equal to it.",

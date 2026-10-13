@@ -152,7 +152,8 @@ Every proposal, whatever produced it, goes through the same steps (`trade.py`):
    - `cooldown_hours_per_instrument` (120): no second order in the same instrument, buy or
      sell, within 120 hours of the last, counted from the broker's order history;
    - one buy and one sell per instrument per batch.
-2. **Sizing** (`sizing.py`). Money becomes a share quantity at most 4 decimal places, rounded
+2. **Sizing** (`sizing.py`). Money becomes a share quantity at most 4 decimal places (fewer
+   for an instrument in `risk.quantity_decimals_by_ticker`, 2 for the core fund), rounded
    down, and the cap is checked again on the rounded value. The price is the holding's own
    (the broker's valuation divided by the quantity), or for a pick not yet held the checked
    outside price, or a row in `prices.csv`; with none, no order. Selling the whole of a

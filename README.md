@@ -138,8 +138,8 @@ sent.
    London lines end in a lower-case `l`. Put the line in `strategy.momentum.core_ticker` and
    make sure it is in `compliance.allowlist`.
 5. **Buy the core fund once by hand** in the app, about `core_weight` of the account, by
-   number of shares rather than by value: the API sends at most 4 decimal places, and a buy
-   by value can leave 8. From then on every run prices the fund from your holding. (A row in
+   number of shares rather than by value, in whole hundredths for the core fund: the API
+   sends at most 4 decimal places (2 for the core fund), and a buy by value can leave 8. From then on every run prices the fund from your holding. (A row in
    `prices.csv`, `date,ticker,close` in the account currency, is the alternative.)
 6. **Run it**: `python3 run.py once`, read what it proposes, then
    `python3 run.py once --execute`. Let it run on practice for a while and read its output.
@@ -196,7 +196,8 @@ always be exited. `python3 gates.py explain` prints the limits in force.
 | Market hours | on | Any order into a closed market. London hours come from Trading 212's published schedule; New York's are in config, with NYSE holidays listed to 2027-12-31 (extend them yearly). |
 | Killswitch | `HALT` | Every order, while a file named `HALT` is in the project folder. |
 
-Then `sizing.py` turns money into shares: at most 4 decimal places, rounded down, with the cap
+Then `sizing.py` turns money into shares: at most 4 decimal places (fewer where an instrument
+takes fewer, `risk.quantity_decimals_by_ticker`), rounded down, with the cap
 checked again on what will actually be sent. It writes the order to the account's ledger
 (`orders_placed.json` for Trading 212 live, `orders_placed.demo.json` for practice,
 `orders_placed.paper.json` for paper) **before** sending it: Trading 212's API is not

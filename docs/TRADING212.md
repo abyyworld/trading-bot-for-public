@@ -273,7 +273,11 @@ forum, and item 13 is untested.
    `sizing.py` turns an amount into a number of shares, rounding down.
 3. **Buy or sell is the sign of the quantity**: positive buys, negative sells. There is no
    side field.
-4. **At most 4 decimal places in a quantity.** More is refused.
+4. **At most 4 decimal places in a quantity, fewer for some instruments.** More is refused
+   as "invalid quantity precision N". US shares take 4, the London core fund `MWIXl_EQ`
+   takes 2, and the API does not publish which. List the exceptions in
+   `risk.quantity_decimals_by_ticker`; an unlisted one is retried once at the places the
+   refusal names.
 5. **No quotes endpoint.** The bot can price only what you hold, hence the hand purchase
    above.
 6. **Tickers are Trading 212's own and case-sensitive** (`AAPL_US_EQ`, `MWIXl_EQ`), and some

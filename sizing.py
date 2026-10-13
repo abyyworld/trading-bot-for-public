@@ -113,6 +113,27 @@ def broker_ticker(ticker, spellings):
     return wanted
 
 
+def decimals_for(ticker, limits):
+    """Decimal places of a share the broker takes for this instrument.
+
+    Trading 212 sets it per instrument and the API does not publish it: US shares take 4,
+    but the London core fund MWIXl_EQ takes only 2, so a partial sell of it sized at 4
+    places is refused as "invalid quantity precision 2", and the ledger then blocks the
+    instrument for the rest of the day. Known exceptions are data in
+    risk.quantity_decimals_by_ticker; anything unlisted gets QUANTITY_DECIMALS, and
+    trade.place retries once at whatever a refusal names. A listed value is held to 0 to
+    QUANTITY_DECIMALS, and one that is not a whole number is ignored rather than trusted.
+    """
+    wanted = str(ticker or "").strip().upper()
+    for name, places in ((limits or {}).get("quantity_decimals_by_ticker") or {}).items():
+        if str(name).strip().upper() != wanted:
+            continue
+        if isinstance(places, bool) or not isinstance(places, int):
+            break
+        return max(0, min(QUANTITY_DECIMALS, places))
+    return QUANTITY_DECIMALS
+
+
 def quantity_for(value, price, decimals=QUANTITY_DECIMALS):
     """Shares for an amount of money, rounded DOWN so the cap can never be exceeded."""
     if price is None or price <= 0 or value <= 0:
@@ -129,7 +150,8 @@ def sell_quantity(wanted, holding, price, keep_value, decimals=QUANTITY_DECIMALS
       At most 4 decimal places. A purchase by value in the app can leave 8, such as
       1.23456789 shares, and rounding that to nearest gives 1.2346, which is more than is
       owned: "Selling more equities than owned". Sending all 8 places is refused too, as
-      "invalid quantity precision 4".
+      "invalid quantity precision 4". 4 is the most any instrument takes, and some take
+      fewer (see decimals_for), so decimals is the instrument's own.
       No dust left behind. Rounding down instead leaves a sliver, and a sell that leaves a
       remainder under 1.00 is refused: "must have opened position at least 1.00". Whether
       that is the account currency, dollars or shares is not documented.
@@ -174,7 +196,8 @@ def size(proposal, positions, history, limits, today=None, outside=None):
     if price is None:
         return None, source
 
-    quantity = quantity_for(wanted, price)
+    places = decimals_for(ticker, limits)
+    quantity = quantity_for(wanted, price, places)
     if quantity <= 0:
         return None, ("%.2f buys less than the smallest tradeable fraction of %s at %.4f"
                       % (wanted, ticker, price))
@@ -198,7 +221,7 @@ def size(proposal, positions, history, limits, today=None, outside=None):
         if holding <= 0:
             return None, "cannot sell %s, none held" % ticker
         keep = float(limits.get("min_position_remainder", 2.0))
-        quantity, how = sell_quantity(quantity, holding, price, keep)
+        quantity, how = sell_quantity(quantity, holding, price, keep, places)
         if quantity is None:
             return None, how
         source = "%s, %s" % (source, how)
@@ -206,7 +229,7 @@ def size(proposal, positions, history, limits, today=None, outside=None):
         quantity = -quantity
 
     sized = dict(proposal)
-    sized["quantity"] = round(quantity, QUANTITY_DECIMALS)
+    sized["quantity"] = round(quantity, places)
     sized["price_used"] = price
     sized["price_source"] = source
     sized["value_actual"] = actual
@@ -449,6 +472,45 @@ def cmd_selftest(args):
            sized is None and "too little" in why)
     expect("sell_quantity leaves a partial sell alone when the rest is worth keeping",
            sell_quantity(0.5, 1.23456789, 150.0, 2.0) == (0.5, "part of the holding"))
+
+    # Decimal places per instrument: a partial sell of a 2-place fund sized at 4 places is
+    # refused as "invalid quantity precision 2".
+    fund = {"quantity_decimals_by_ticker": {"FUNDl_EQ": 2, "SEVEN": 7, "NEG": -1,
+                                            "TEXT": "2", "FLAG": True},
+            "max_order_value": 5000.0}
+    expect("a listed instrument gets its own places, whatever the case",
+           decimals_for("FUNDl_EQ", fund) == 2 and decimals_for("fundL_eq", fund) == 2)
+    expect("an unlisted instrument gets the default 4",
+           decimals_for("AAA", fund) == 4 and decimals_for("FUNDl_EQ", {}) == 4
+           and decimals_for("FUNDl_EQ", None) == 4)
+    expect("listed places are held to 0..4",
+           decimals_for("SEVEN", fund) == 4 and decimals_for("NEG", fund) == 0)
+    expect("listed places that are not a whole number are ignored",
+           decimals_for("TEXT", fund) == 4 and decimals_for("FLAG", fund) == 4)
+    held_fund = {"FUNDL_EQ": {"current_price": 5.0, "quantity": 600.0}}
+    sized, _ = size({"ticker": "FUNDl_EQ", "action": "sell", "value": 1234.5678}, held_fund,
+                    history, fund, today)
+    expect("a partial sell of a 2-place instrument goes at 2 places, rounded down",
+           sized and sized["quantity"] == -246.91 and sized["value_actual"] == 1234.55)
+    sized, _ = size({"ticker": "FUNDl_EQ", "action": "buy", "value": 33.33}, held_fund,
+                    history, fund, today)
+    expect("a buy of a 2-place instrument goes at 2 places, rounded down",
+           sized and sized["quantity"] == 6.66)
+    exact = {"FUNDL_EQ": {"current_price": 5.0, "quantity": 120.5}}
+    sized, _ = size({"ticker": "FUNDl_EQ", "action": "sell", "value": 9000.0}, exact,
+                    history, fund, today)
+    expect("a 2-place holding of a 2-place instrument is sold exactly",
+           sized and sized["quantity"] == -120.5)
+    loose = {"FUNDL_EQ": {"current_price": 5.0, "quantity": 120.5678}}
+    sized, _ = size({"ticker": "FUNDl_EQ", "action": "sell", "value": 9000.0}, loose,
+                    history, fund, today)
+    expect("a holding with more places than the instrument takes leaves the remainder, "
+           "at 2 places", sized and sized["quantity"] == -120.16)
+    other = {"AAA": {"current_price": 3.0, "quantity": 0.0}}
+    sized, _ = size({"ticker": "AAA", "action": "buy", "value": 10.0}, other, history, fund,
+                    today)
+    expect("an unlisted instrument is still sized at 4 places",
+           sized and sized["quantity"] == 3.3333)
 
     # Malformed input.
     for bad in ({"ticker": "CSV", "action": "buy", "value": "lots"},

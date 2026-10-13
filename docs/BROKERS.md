@@ -237,7 +237,10 @@ The runner POSTs:
 ```
 
 - Positive `quantity` buys, negative sells. There is no side field.
-- At most 4 decimal places. The runner never sends more, and rounds buys down.
+- At most 4 decimal places, and fewer for an instrument listed in
+  `risk.quantity_decimals_by_ticker` (the London core fund takes 2). The runner rounds down
+  to those places. Refused with `quantity-precision-mismatch`, it sends the order once more
+  at the places the refusal names.
 - The ticker is spelled exactly: the allowlist's spelling first, then the position's.
 
 Accepted, `200` (or `201`):
@@ -343,7 +346,7 @@ yourself before trusting a paper fill: a wrong symbol prices every paper trade w
 
 | Status, type | When |
 | --- | --- |
-| 400 `invalid-quantity-precision` | More than 4 decimal places. |
+| 400 `quantity-precision-mismatch` | More decimal places than the instrument takes: "invalid quantity precision N", where N is 4, or fewer for some instruments (2 for the London core fund). |
 | 400 `selling-equity-not-owned` | Selling more than is held. |
 | 400 `min-opened-position-exceeded` | A sell that leaves a holding worth under 1.00 of the account currency ("must have opened position at least 1.00"). |
 | 400 `insufficient-free-for-stocks-buy` | A buy over `(1 - hold)` of the free cash. |
@@ -481,7 +484,9 @@ an order without any error.
       from the other broker's symbol inside the adapter, both ways. The core fund's ticker
       must match the one in `compliance.allowlist` and `strategy.momentum.core_ticker`.
 - [ ] **At most 4 decimal places.** Pass the quantity on as given. If the other broker takes
-      only whole shares, refuse a fractional order with a 400; never round it up.
+      only whole shares, refuse a fractional order with a 400; never round it up. A refusal
+      shaped as `quantity-precision-mismatch` with "invalid quantity precision N" lets the
+      runner retry once at N places (N is 0 for whole shares).
 - [ ] **The sign is the side.** Positive buys, negative sells.
 - [ ] **History newest first, with `createdAt`.** Every order, hand-placed ones included,
       wrapped as `{"order": {...}}` with `order.ticker` and `createdAt` in UTC ISO 8601 with

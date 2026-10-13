@@ -36,6 +36,8 @@ Two places this deliberately fails closed rather than guessing:
 
 import argparse
 import json
+import math
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -381,6 +383,28 @@ def broker_label(broker_config):
     return label or str(broker_config.get("environment") or "unknown")
 
 
+def precision_retry(status, body, quantity):
+    """The quantity to send again after the broker refused it for its decimal places, or
+    None. Trading 212 sets the places per instrument and says how many it takes when it
+    refuses, "invalid quantity precision 2", so the quantity is cut to that many, rounded
+    down so a buy spends less and a sell sells less than was passed. Nothing else is
+    retried: any other answer, a detail that names no number, or a quantity that already
+    fits gives None."""
+    if status != 400 or not isinstance(body, dict):
+        return None
+    if not str(body.get("type", "")).endswith("quantity-precision-mismatch"):
+        return None
+    found = re.search(r"invalid quantity precision (\d+)", str(body.get("detail", "")))
+    if not found:
+        return None
+    places = min(int(found.group(1)), sizing.QUANTITY_DECIMALS)
+    factor = 10 ** places
+    fewer = round(math.floor(abs(quantity) * factor + 1e-6) / factor, places)
+    if fewer <= 0 or fewer >= abs(quantity) - 1e-9:
+        return None
+    return math.copysign(fewer, quantity)
+
+
 def place(orders, config, broker_config, key, secret, state, ledger, today, note="",
           ledger_file=None):
     """Send each order, the ledger written before and after every request: (ledger, sent),
@@ -408,6 +432,27 @@ def place(orders, config, broker_config, key, secret, state, ledger, today, note
             method="POST",
             payload={"ticker": sizing.broker_ticker(order["ticker"], spellings),
                      "quantity": order["quantity"]})
+
+        # Refused for its decimal places: no order was made, so it goes once more at the
+        # places the refusal names, the ledger rewritten first as for any request. Without
+        # this the ledger blocks the instrument for the rest of the day, and with it any buy
+        # waiting on a sale's cash.
+        fewer = precision_retry(status, body, order["quantity"])
+        if fewer is not None:
+            print("  refused %s %s %.4f for its decimal places (%s); sending %s instead. "
+                  "List it in risk.quantity_decimals_by_ticker so it is sized right first time"
+                  % (order["action"], order["ticker"], abs(order["quantity"]),
+                     body.get("detail"), abs(fewer)))
+            value = round(abs(order["value_actual"] * fewer / order["quantity"]), 2)
+            order = dict(order, quantity=fewer, value_actual=value)
+            ledger = sizing.record_order(ledger, today, order["ticker"], order["action"],
+                                         order["quantity"], "sending", order["value_actual"])
+            sizing.save_ledger(ledger, ledger_file, today=today)
+            status, body = broker.request(
+                broker_config, broker_config["endpoints"]["place_market_order"], key, secret,
+                method="POST",
+                payload={"ticker": sizing.broker_ticker(order["ticker"], spellings),
+                         "quantity": order["quantity"]})
 
         ok = True if status in (200, 201) else (None if status is None else False)
         ledger = sizing.record_order(ledger, today, order["ticker"], order["action"],
@@ -746,11 +791,13 @@ class FakeBroker:
     def __init__(self, cash, held, prices, history=(), settle_after=0, refuse=(), lag=False,
                  when="2026-10-14T15:00:00+00:00", timeout=(), positions_fail_at=None,
                  positions_empty_at=None, history_fail_at=None, currency="GBP",
-                 summary_reply=None):
+                 summary_reply=None, places=None):
         self.cash, self.held, self.prices = cash, dict(held), dict(prices)
         # currency: what the summary reports the account in. summary_reply: (status, body)
         # the summary answers instead, as an adapter's refusal.
         self.currency, self.summary_reply = currency, summary_reply
+        # places: {TICKER: n} for instruments that take fewer than 4 decimal places.
+        self.places = dict(places or {})
         self.history, self.settle_after = list(history), settle_after
         self.refuse, self.lag, self.when = set(refuse), lag, when
         # timeout: orders placed but answered with nothing, as a timed-out request can be.
@@ -768,6 +815,11 @@ class FakeBroker:
             self.posts.append((ticker, quantity))
             if ticker in self.refuse:
                 return 400, {"type": "/api-errors/insufficient-free-for-stocks-buy"}
+            places = self.places.get(ticker)
+            if places is not None and abs(quantity * 10 ** places
+                                          - round(quantity * 10 ** places)) > 1e-6:
+                return 400, {"type": "/api-errors/quantity-precision-mismatch",
+                             "detail": "invalid quantity precision %d" % places}
             self.pending.append([ticker, quantity, self.settle_after])
             if ticker in self.timeout:
                 return None, "network error: timed out"
@@ -971,6 +1023,48 @@ def cmd_selftest():
         status, out, pauses = run(fake, settings_for())
         expect("an account that really holds nothing still trades",
                fake.posts and all(q > 0 for t, q in fake.posts))
+
+        # An instrument that takes 2 decimal places, as the London core fund does. Unlisted,
+        # the sale is sized at 4, refused for its places, and goes again at 2 in the same
+        # run, so the second pass still has its cash. Listed, it is sized right first time.
+        saves = []
+        sizing.save_ledger = lambda ledger, *a, **k: saves.append(ledger) or ledger
+        fake = account(cash=100.37, places={"CORE_US_EQ": 2})
+        status, out, pauses = run(fake, settings_for())
+        core = [q for t, q in fake.posts if t == "CORE_US_EQ"]
+        expect("a sale refused for its decimal places goes again at the places named",
+               len(core) == 2 and core[0] < 0 and core[1] < 0
+               and abs(core[1] * 100 - round(core[1] * 100)) < 1e-6
+               and 0 < abs(core[0]) - abs(core[1]) < 0.01)
+        entry = saves[-1].get("2026-10-14|CORE_US_EQ|sell", {}) if saves else {}
+        expect("the ledger holds the quantity that went", entry.get("quantity") == core[-1])
+        expect("the refusal names the config list to add it to",
+               "risk.quantity_decimals_by_ticker" in out)
+        expect("and the second pass still buys with the sale's cash",
+               any(t in picks and q > 0 for t, q in fake.posts) and status == 0)
+        listed = settings_for()
+        listed["risk"]["quantity_decimals_by_ticker"] = {"CORE_US_EQ": 2}
+        fake = account(cash=100.37, places={"CORE_US_EQ": 2})
+        status, out, pauses = run(fake, listed)
+        core = [q for t, q in fake.posts if t == "CORE_US_EQ"]
+        expect("a listed instrument is sized at its places first time, nothing refused",
+               len(core) == 1 and abs(core[0] * 100 - round(core[0] * 100)) < 1e-6
+               and "decimal places" not in out)
+        sizing.save_ledger = keep_ledger
+        refusal = {"type": "/api-errors/quantity-precision-mismatch",
+                   "detail": "invalid quantity precision 2"}
+        expect("precision_retry rounds down and keeps the side",
+               precision_retry(400, refusal, -123.4567) == -123.45
+               and precision_retry(400, refusal, 12.3456) == 12.34)
+        expect("precision_retry leaves a quantity that already fits alone",
+               precision_retry(400, refusal, -123.45) is None
+               and precision_retry(400, refusal, 0.004) is None)
+        expect("precision_retry ignores any other refusal or answer",
+               precision_retry(400, {"type": "/api-errors/insufficient-free-for-stocks-buy",
+                                     "detail": "invalid quantity precision 2"}, 1.2345) is None
+               and precision_retry(400, dict(refusal, detail="no number"), 1.2345) is None
+               and precision_retry(200, refusal, 1.2345) is None
+               and precision_retry(None, "network error", 1.2345) is None)
 
         # The fresh read after the sales settle (the third read of the positions) refused or
         # empty: read as holding nothing, it would buy picks already full past the cap.

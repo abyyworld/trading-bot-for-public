@@ -29,7 +29,9 @@ What it emulates, and what it does not:
                real broker. A close more than 10 days old is no price.
   fees         fx_fee, Trading 212's 0.15% currency conversion fee, on any instrument whose
                currency is not the account's, buying and selling. No other costs.
-  refusals     as Trading 212 refuses, 400 with its error types: more than 4 decimal places;
+  refusals     as Trading 212 refuses, 400 with its error types: more than 4 decimal places,
+               or more than a symbol's own decimals where it lists fewer (the London core
+               fund takes 2), as quantity-precision-mismatch;
                selling more than is held (selling-equity-not-owned); a sell that leaves a
                remainder worth under 1.00 of the account currency (min-opened-position-
                exceeded: the real broker does not say which unit its 1.00 is in, and a whole
@@ -38,8 +40,8 @@ What it emulates, and what it does not:
                (insufficient-free-for-stocks-buy: the real broker keeps back part of the
                free funds on a market buy); a ticker not spelled exactly as listed, since
                case matters (MWIXl_EQ, never MWIXL_EQ). With no price it refuses rather than
-               fill at a guess. The precision and unknown-ticker error types are this
-               file's own spelling; the other three are Trading 212's.
+               fill at a guess. The unknown-ticker error type is this file's own
+               spelling; the other four are Trading 212's.
   hours        exchanges publishes one venue, the LSE: weekdays 08:00 to 16:30 London time
                for the next 14 days, read through zoneinfo so summer time is right, with no
                holidays. A US share carries a schedule id that has no published schedule,
@@ -255,6 +257,15 @@ class Paper:
             raise
 
     # ------------------------------------------------------------------ instruments and prices
+
+    def decimals(self, ticker):
+        """Decimal places an order for ticker may carry: a symbol's own decimals where it
+        lists a whole number from 0 to 4, else DECIMALS."""
+        spec = self.symbols.get(ticker)
+        places = spec.get("decimals") if isinstance(spec, dict) else None
+        if isinstance(places, int) and not isinstance(places, bool) and 0 <= places <= DECIMALS:
+            return places
+        return DECIMALS
 
     def instrument(self, ticker, state):
         """What is known about a ticker spelled exactly so, or None if it is not listed."""
@@ -607,9 +618,10 @@ class Paper:
                 or quantity == 0):
             return 400, refusal("bad-request", "ticker must be text and quantity a non-zero "
                                 "number, positive to buy and negative to sell")
-        if abs(quantity * 10 ** DECIMALS - round(quantity * 10 ** DECIMALS)) > 1e-6:
-            return 400, refusal("invalid-quantity-precision",
-                                "invalid quantity precision %d" % DECIMALS)
+        places = self.decimals(ticker)
+        if abs(quantity * 10 ** places - round(quantity * 10 ** places)) > 1e-6:
+            return 400, refusal("quantity-precision-mismatch",
+                                "invalid quantity precision %d" % places)
         state = self.load()
         return self.execute(state, ticker, float(quantity), "API", payload)
 
@@ -915,7 +927,7 @@ def cmd_selftest():
                  "fx_fee": 0.0015, "hold": 0.05, "currency": currency, "indexes": ["sp500"],
                  "symbols": {"MWIXl_EQ": {"yahoo": "MWIX.L", "price_unit": 0.01,
                                           "currency": "GBP", "venue": "LSE",
-                                          "name": "Core fund (test)"}}}
+                                          "name": "Core fund (test)", "decimals": 2}}}
         paper.update(extra)
         return {"adapter": "paper", "environment": "demo", "endpoints": dict(ENDPOINTS),
                 "paper": paper}
@@ -1008,7 +1020,12 @@ def cmd_selftest():
             expect("a ticker not listed at all is refused", status == 400)
             status, body = buy(gbp, "BBB_US_EQ", 1.23456)
             expect("more than 4 decimal places: invalid quantity precision",
-                   status == 400 and "precision 4" in body["detail"])
+                   status == 400 and "precision 4" in body["detail"]
+                   and kind(body).endswith("quantity-precision-mismatch"))
+            status, body = buy(gbp, "MWIXl_EQ", 1.234)
+            expect("more than a symbol's own decimals: invalid quantity precision 2",
+                   status == 400 and "precision 2" in body["detail"]
+                   and kind(body).endswith("quantity-precision-mismatch"))
             status, body = buy(gbp, "AAA_US_EQ", -3)
             expect("selling more than held: selling-equity-not-owned, naming what is owned",
                    status == 400 and kind(body).endswith("selling-equity-not-owned")
