@@ -23,9 +23,11 @@ order is held rather than sent. An unknown market state is not an open one.
 """
 
 import argparse
+import json
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 def iso_text(value):
@@ -349,6 +351,26 @@ def cmd_selftest(args):
            not is_open(71, schedules, utc(10, 7, 15, 0), dict(ny, timezone="Mars/Olympus"))[0])
     expect("missing local hours fail closed",
            not is_open(71, schedules, utc(10, 7, 15, 0), {"timezone": "America/New_York"})[0])
+
+    # The shipped list in config.json, to be extended every year. These are 2028 dates from
+    # the NYSE's published calendar, so an extension that is forgotten or mistyped fails here
+    # rather than in a run.
+    config = json.loads((Path(__file__).resolve().parent / "config.json")
+                        .read_text(encoding="utf-8"))
+    shipped = config["execution"]["market_hours_fallback"]["_US_EQ"]
+    ok, why = is_open(71, schedules, utc(4, 14, 15, 0, 2028), shipped)
+    expect("the configured list knows Good Friday 2028 is a holiday",
+           not ok and "holiday" in why)
+    expect("and that the day after Thanksgiving 2028 closes at 13:00 New York time",
+           is_open(71, schedules, utc(11, 24, 17, 30, 2028), shipped)[0]
+           and not is_open(71, schedules, utc(11, 24, 18, 30, 2028), shipped)[0])
+    ok, why = is_open(71, schedules, utc(3, 1, 15, 0, 2028), shipped)
+    expect("and an ordinary 2028 day is open without the does-not-know warning",
+           ok and "does NOT know" not in why)
+    expect("New Year's Day 2028 is a Saturday and not observed: the Friday before and the "
+           "Monday after both trade",
+           is_open(71, schedules, utc(12, 31, 15, 0, 2027), shipped)[0]
+           and is_open(71, schedules, utc(1, 3, 15, 0, 2028), shipped)[0])
 
     # Stamps as brokers send them. Before Python 3.11 fromisoformat refused a Z and any
     # fraction that is not 3 or 6 digits, so these must parse the same on 3.9 as on 3.13.

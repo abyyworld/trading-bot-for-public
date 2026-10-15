@@ -193,7 +193,7 @@ always be exited. `python3 gates.py explain` prints the limits in force.
 | Position cap | 1,500 a stock | Any single stock over `risk.max_position_value`; the core fund has its own cap. |
 | Cash buffer and broker hold | 20, 5% | Spending into the last 20 of cash. A buy counts as its value / 0.95, because Trading 212 takes a market buy only up to about 95% of free funds. |
 | Cooldown | 120 hours | A second order in the same instrument, counted from the broker's order history. |
-| Market hours | on | Any order into a closed market. London hours come from Trading 212's published schedule; New York's are in config, with NYSE holidays listed to 2027-12-31 (extend them yearly). |
+| Market hours | on | Any order into a closed market. London hours come from Trading 212's published schedule; New York's are in config, with NYSE holidays listed to 2028-12-31 (extend them yearly). |
 | Killswitch | `HALT` | Every order, while a file named `HALT` is in the project folder. |
 
 Then `sizing.py` turns money into shares: at most 4 decimal places (fewer where an instrument

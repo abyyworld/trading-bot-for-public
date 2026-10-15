@@ -557,15 +557,26 @@
           "2027-07-05",
           "2027-09-06",
           "2027-11-25",
-          "2027-12-24"
+          "2027-12-24",
+          "2028-01-17",
+          "2028-02-21",
+          "2028-04-14",
+          "2028-05-29",
+          "2028-06-19",
+          "2028-07-04",
+          "2028-09-04",
+          "2028-11-23",
+          "2028-12-25"
         ],
         "early_close": {
           "2026-11-27": "13:00",
           "2026-12-24": "13:00",
-          "2027-11-26": "13:00"
+          "2027-11-26": "13:00",
+          "2028-07-03": "13:00",
+          "2028-11-24": "13:00"
         },
-        "holidays_known_through": "2027-12-31",
-        "source": "NYSE Group's 2026, 2027 and 2028 holiday and early closings calendar, announced 2025-12-23. Nasdaq keeps the same days."
+        "holidays_known_through": "2028-12-31",
+        "source": "NYSE Group's 2026, 2027 and 2028 holiday and early closings calendar, announced 2025-12-23. New Year's Day 2028 falls on a Saturday and is not observed, so Friday 2027-12-31 and Monday 2028-01-03 are full sessions. Nasdaq keeps the same days. Add 2029 once the NYSE publishes it."
       }
     }
   },

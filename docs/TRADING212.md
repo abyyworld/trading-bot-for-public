@@ -308,7 +308,7 @@ forum, and item 13 is untested.
 12. **The exchanges endpoint has no New York venues.** It publishes European and Canadian
     venues, not NYSE or Nasdaq. US hours therefore come from `config.json`
     (`execution.market_hours_fallback`): 09:30 to 16:00 New York time, with the NYSE's
-    holidays and early closes listed to 2027-12-31. **Extend that list every year**: past
+    holidays and early closes listed to 2028-12-31. **Extend that list every year**: past
     `holidays_known_through`, the bot trades on every weekday and says it does not know the
     holidays.
 13. **Whether a market order sent while the market is shut queues for the open is
